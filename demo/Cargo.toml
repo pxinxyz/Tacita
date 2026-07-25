@@ -1,0 +1,12 @@
+
+[package]
+name = "restricted-gui-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+restricted-gui = { path = "../core" }
+winit = "0.30"
+wgpu = "30"
+pollster = "0.4"

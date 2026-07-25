@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["core", "demo", "sdk", "ffi", "backends/d3d11", "backends/d3d12", "adapters/win32"]

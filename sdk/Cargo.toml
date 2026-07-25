@@ -1,0 +1,9 @@
+[package]
+name = "restricted-gui-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Flat, ceremony-free facade over the restricted-gui immediate-mode GUI core"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+restricted-gui = { path = "../core" }
