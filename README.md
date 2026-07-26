@@ -1,8 +1,8 @@
-# Tacita
+# Tacita (internal, restricted-gui)
 
 > An immediate-mode GUI framework written in Rust — `#![no_std]`, renderer-agnostic, built for embedding anywhere.
 
-Tacita is an immediate-mode GUI library whose core is `#![no_std]` (`core` + `alloc`, no CRT) and fully renderer- and platform-agnostic. The core never touches a GPU or an OS API: hosts feed it a per-frame input snapshot, declare UI with flat calls, and consume vertex/index/command draw lists through any renderer they bring.
+Tacita (restricted-gui) is an immediate-mode GUI library whose core is `#![no_std]` (`core` + `alloc`, no CRT) and fully renderer- and platform-agnostic. The core never touches a GPU or an OS API: hosts feed it a per-frame input snapshot, declare UI with flat calls, and consume vertex/index/command draw lists through any renderer they bring.
 
 The widget surface covers windows, tabs, collapsing headers, scroll regions, checkboxes, sliders, buttons, text inputs, combo boxes, a rich HSV color picker, keybind selectors, tooltips, and icon fonts merged into the same atlas as text. Anti-aliasing is analytic — exact pixel coverage rasterization in the AGG/FreeType lineage, cached as masks in the font atlas — and steady-state frames allocate zero memory after warmup.
 
