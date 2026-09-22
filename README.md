@@ -6,7 +6,14 @@ Tacita (aka restricted-gui) is an immediate-mode GUI library whose core is `#![n
 
 The widget surface covers windows, tabs, collapsing headers, scroll regions, checkboxes, sliders, buttons, text inputs, combo boxes, a rich HSV color picker, keybind selectors, tooltips, and icon fonts merged into the same atlas as text. Anti-aliasing is analytic — exact pixel coverage rasterization in the AGG/FreeType lineage, cached as masks in the font atlas — and steady-state frames allocate zero memory after warmup.
 
-Primary use case is game hacking overlays: an injected DLL rendering through an `IDXGISwapChain::Present` hook (D3D11/D3D12 backends included) with input from a WndProc hook, where the library's input-capture queries drive the swallow/pass-through decision against the game beneath. It serves equally for embedded tooling and any host that needs a GUI it fully controls.
+Tacita targets hosts that own their own rendering and cannot hand control to a framework. Typical uses:
+
+- **In-process overlays** — loaded into a running process, rendering through an `IDXGISwapChain::Present` hook with input from a `WndProc` hook, where the input-capture queries drive the swallow/pass-through decision against whatever runs beneath.
+- **Game and engine tooling** — debug HUDs, inspectors and in-editor panels for a host that already owns its device and swap chain.
+- **Embedded and headless hosts** — `#![no_std]` with a bring-your-own renderer, including offscreen targets.
+- **Developer tooling** — internal inspectors that need a real UI without taking a widget-toolkit dependency.
+
+The immediate-mode design is what makes these shareable: the core holds no platform or GPU state, so the same widget code runs under D3D11, D3D12, wgpu, or a host-specific backend.
 
 ## Status
 
