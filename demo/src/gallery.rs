@@ -402,16 +402,21 @@ pub fn draw(ui: &mut Ui<'_>, state: &mut DemoState, frame: &Frame<'_>) {
             .expect("sidebar item");
             ui.layout_item(layout, 1, |ui, _| {
                 let width = w - sidebar;
+                let reset_width = (ui.measure_text("Reset examples")[0]
+                    + state.style.frame_padding[0] * 2.)
+                    .ceil()
+                    + 2.;
+                let reset_left = width - 28. - reset_width;
                 let items = [
                     LayoutItem {
                         absolute: true,
                         offset: [28., 22.],
-                        ..LayoutItem::fixed([width - 220., 74.])
+                        ..LayoutItem::fixed([reset_left - 48., 74.])
                     },
                     LayoutItem {
                         absolute: true,
-                        offset: [width - 166., 31.],
-                        ..LayoutItem::fixed([140., 52.])
+                        offset: [reset_left, 31.],
+                        ..LayoutItem::fixed([reset_width, 52.])
                     },
                 ];
                 ui.layout(
@@ -784,7 +789,7 @@ mod tests {
         App::new(ctx, fonts)
     }
 
-    fn frame(app: &mut App, size: [f32; 2], mouse: [f32; 2], pressed: bool) {
+    fn frame(app: &mut App, size: [f32; 2], mouse: [f32; 2], pressed: bool) -> ([f32; 4], f32) {
         prepare(&mut app.ctx, size);
         app.ctx.set_input(InputState {
             viewport_size: size,
@@ -818,12 +823,35 @@ mod tests {
             .window(MAIN_WINDOW_TITLE, ScrollFlags::NONE, |ui| {
                 draw(ui, &mut app.state, &info)
             });
+        let reset = node(app, "Reset examples", AccessibilityRole::Button)
+            .unwrap()
+            .rect;
+        let reset_width =
+            app.ctx.ui().measure_text("Reset examples")[0] + app.state.style.frame_padding[0] * 2.;
+        let text_color = app.ctx.style.text;
         let data = app.ctx.render();
         assert!(!data.vertices.is_empty());
         assert!(data
             .vertices
             .iter()
             .all(|v| v.pos.iter().all(|n| n.is_finite())));
+        let mut offset = 0;
+        for command in data.commands {
+            let end = offset + command.elem_count as usize;
+            let reset_text = data.indices[offset..end].iter().any(|index| {
+                let vertex = &data.vertices[*index as usize];
+                vertex.col == text_color
+                    && vertex.pos[0] >= reset[0]
+                    && vertex.pos[0] <= reset[2]
+                    && vertex.pos[1] >= reset[1]
+                    && vertex.pos[1] <= reset[3]
+            });
+            if reset_text {
+                return (command.clip_rect, reset_width);
+            }
+            offset = end;
+        }
+        panic!("reset button text must be drawn");
     }
 
     fn node(app: &App, name: &str, role: AccessibilityRole) -> Option<AccessibilityNode> {
@@ -881,6 +909,35 @@ mod tests {
                     .rect;
                 assert!(
                     reset[0] >= 0. && reset[2] <= size[0] && reset[1] >= 0. && reset[3] <= size[1]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reset_button_fits_its_clip_across_themes_and_window_sizes() {
+        let mut app = app();
+        for theme in 0..THEME_NAMES.len() {
+            app.state.theme = theme;
+            app.apply_theme();
+            for size in [[1360., 860.], [900., 620.]] {
+                let (clip, expected_width) = frame(&mut app, size, [-1.; 2], false);
+                let reset = node(&app, "Reset examples", AccessibilityRole::Button)
+                    .unwrap()
+                    .rect;
+                assert!(
+                    reset[2] - reset[0] + 0.001 >= expected_width,
+                    "{} at {size:?}: width {}, expected {expected_width}",
+                    THEME_NAMES[theme],
+                    reset[2] - reset[0]
+                );
+                assert!(
+                    reset[0] >= clip[0]
+                        && reset[1] >= clip[1]
+                        && reset[2] <= clip[2]
+                        && reset[3] <= clip[3],
+                    "{} at {size:?}: button {reset:?}, clip {clip:?}",
+                    THEME_NAMES[theme]
                 );
             }
         }

@@ -17,6 +17,62 @@ fn declare(ui: &mut crate::ui::Ui, e: &mut TextEditor) {
     )
     .unwrap();
 }
+
+#[test]
+fn text_edit_preserves_each_padding_axis_and_fits_the_default_line_height() {
+    for (padding, border) in [
+        ([9., 6.], 1.),
+        ([6., 4.], 1.),
+        ([14., 2.], 1.),
+        ([2., 12.], 1.),
+        ([1., 1.], 8.),
+    ] {
+        let mut ctx = test_context();
+        ctx.style.frame_padding = padding;
+        ctx.style.border_size = border;
+        ctx.style.text = [12, 34, 56, 255];
+        let mut editor = TextEditor::new("Ágjpqy").unwrap();
+        let mut rect = [0.; 4];
+        frame(&mut ctx, [-1.; 2], false, |ui| {
+            rect = ui
+                .text_edit("editor", &mut editor, TextEditOptions::default())
+                .unwrap()
+                .rect;
+        });
+        let data = ctx.windows[0].draw_list.as_draw_data();
+        let mut offset = 0;
+        let mut found = false;
+        for command in data.commands {
+            let end = offset + command.elem_count as usize;
+            let glyphs: alloc::vec::Vec<_> = data.indices[offset..end]
+                .iter()
+                .map(|index| &data.vertices[*index as usize])
+                .filter(|v| v.col == ctx.style.text && v.pos[0] >= rect[0] && v.pos[1] >= rect[1])
+                .collect();
+            if !glyphs.is_empty() {
+                let clip = command.clip_rect;
+                assert!(
+                    clip[3] - clip[1] + 0.001 >= editor.layout.line_height(),
+                    "padding {padding:?}: line {}, clip {clip:?}",
+                    editor.layout.line_height()
+                );
+                assert!((clip[0] - rect[0] - padding[0].max(border)).abs() < 0.001);
+                assert!((clip[1] - rect[1] - padding[1].max(border)).abs() < 0.001);
+                for vertex in glyphs {
+                    assert!(
+                        vertex.pos[1] >= clip[1].floor() && vertex.pos[1] <= clip[3].ceil(),
+                        "glyph outside {clip:?}: {:?}",
+                        vertex.pos
+                    );
+                }
+                found = true;
+            }
+            offset = end;
+        }
+        assert!(found);
+    }
+}
+
 fn keys(ctx: &mut crate::context::Context, e: &mut TextEditor, events: &[KeyEvent]) {
     frame_with_input(
         ctx,

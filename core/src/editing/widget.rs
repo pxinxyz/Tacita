@@ -168,13 +168,16 @@ impl Ui<'_> {
         let face = ctx.active_font();
         let id = widgets::widget_id(ctx, label);
         let line = ctx.font.shaped_line_metrics(face).1;
+        let padding = style
+            .frame_padding
+            .map(|value| value.max(style.border_size).max(0.));
         let width = if options.size[0] == 0. {
             widgets::available_width(ctx)
         } else {
             options.size[0]
         };
         let height = if options.size[1] == 0. {
-            line * if options.multiline { 6. } else { 1. } + 2. * style.frame_padding[1]
+            line * if options.multiline { 6. } else { 1. } + 2. * padding[1]
         } else {
             options.size[1]
         };
@@ -190,13 +193,20 @@ impl Ui<'_> {
             Some(WidgetState::Scroll { offset, .. }) => *offset,
             _ => 0.,
         };
-        let inset = style.frame_padding[0]
-            .max(style.frame_padding[1])
-            .max(style.border_size);
+        let padding = [
+            padding[0].min((rect[2] - rect[0]).max(0.) * 0.5),
+            padding[1].min((rect[3] - rect[1]).max(0.) * 0.5),
+        ];
+        let content_bounds = [
+            rect[0] + padding[0],
+            rect[1] + padding[1],
+            rect[2] - padding[0],
+            rect[3] - padding[1],
+        ];
         let reserved = crate::scroll::geometry(
             &style,
-            rect,
-            inset,
+            content_bounds,
+            0.,
             flags,
             if options.multiline { f32::MAX } else { 0. },
         );
@@ -209,7 +219,7 @@ impl Ui<'_> {
         };
         editor.prepare(&mut ctx.font, face, shaped)?;
         let mut geometry =
-            crate::scroll::geometry(&style, rect, inset, flags, editor.layout.size()[1]);
+            crate::scroll::geometry(&style, content_bounds, 0., flags, editor.layout.size()[1]);
         let mut offset = ctx.scroll_position(
             scroll_id,
             old.clamp(0., geometry.max_offset),
@@ -391,7 +401,8 @@ impl Ui<'_> {
             }
         }
         editor.prepare(&mut ctx.font, face, shaped)?;
-        geometry = crate::scroll::geometry(&style, rect, inset, flags, editor.layout.size()[1]);
+        geometry =
+            crate::scroll::geometry(&style, content_bounds, 0., flags, editor.layout.size()[1]);
         offset = offset.clamp(0., geometry.max_offset);
         let caret = editor.visual_caret();
         if focused && reveal {
