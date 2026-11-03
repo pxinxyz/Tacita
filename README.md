@@ -14,6 +14,8 @@ The application owns its window, graphics device, and swap chain.
 Tacita produces draw data for a renderer.
 The core uses `no_std` with `alloc`.
 
+https://github.com/user-attachments/assets/bd03ed00-9938-4251-9c3e-171547b80d83
+
 ## Features
 
 - The core provides windows, tabs, menus, popups, scroll areas, and docking.
