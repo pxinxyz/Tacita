@@ -56,7 +56,7 @@ mod tests {
         let mut font = icon_font();
         for &(name, ch) in ALL {
             let gen = font.atlas_generation();
-            let (_, quad) = font.glyph_quad(ch, [0.0, 0.0]);
+            let (_, quad) = font.glyph_quad(crate::font::FontId::DEFAULT, ch, [0.0, 0.0]);
             assert_eq!(
                 font.atlas_generation(),
                 gen,

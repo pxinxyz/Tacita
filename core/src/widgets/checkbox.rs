@@ -2,32 +2,32 @@ use super::{draw_border, lighten, BORDER_LIGHTEN};
 use crate::id::split_label;
 use crate::ui::{hovered, point_in_rect, Ui};
 
-// A square, a check, a bool flipped in place. The simplest widget we ship, and still the one hosts will hand garbage bytes to through the FFI.
 pub(crate) fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
     let ctx = &mut *ui.ctx;
     let id = super::widget_id(ctx, label);
     let display = split_label(label).0;
     let style = ctx.style;
-    let side = ctx.font.line_height();
-    let text_size = ctx.font.measure(display);
+    let face = ctx.active_font();
+    let side = ctx.font.line_height_in(face);
+    let text_size = ctx.font.measure_in(face, display);
     let size = if display.is_empty() {
         [side, side]
     } else {
         [side + style.item_spacing[0] + text_size[0], side]
     };
-    let rect = super::item_rect(ctx, size);
-    super::register_item(ctx, id, rect);
+    let rect = super::interactive_rect(ctx, size);
+    super::register_focusable_item(ctx, id, rect);
     let box_rect = [rect[0], rect[1], rect[0] + side, rect[3]];
 
     let mouse = ctx.input.mouse_pos;
-    let inside = point_in_rect(mouse, rect);
+    let inside = point_in_rect(mouse, ctx.target_rect(rect));
     let left_down = ctx.input.mouse_down[0];
     let left_pressed = left_down && !ctx.prev_mouse_down[0];
     if inside && left_pressed {
         ctx.set_active(id);
     }
     let held = ctx.active == Some(id);
-    let toggled = held && !left_down && inside;
+    let toggled = (held && !left_down && inside) || ctx.keyboard_activate == Some(id);
     if held && !left_down {
         ctx.clear_active();
     }
@@ -39,6 +39,17 @@ pub(crate) fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
     if hovered {
         ctx.hot = Some(id);
     }
+    ctx.id_stack.semantics.describe(
+        id,
+        crate::accessibility::AccessibilityRole::CheckBox,
+        if *value { "on" } else { "off" },
+        if *value {
+            crate::accessibility::AccessibilityState::CHECKED
+        } else {
+            0
+        },
+        3,
+    );
     let active = ctx.active == Some(id);
     let bg = if active && inside {
         style.widget_bg_active
@@ -48,6 +59,7 @@ pub(crate) fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
         style.widget_bg
     };
 
+    let bg = ctx.widget_color(id, bg);
     let (font, draw_list) = super::draw_parts(ctx);
     super::chrome_fill(font, draw_list, style.corner_rounding, box_rect, bg);
     if style.border_size > 0.0 {
@@ -73,7 +85,7 @@ pub(crate) fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
             box_rect[2] + style.item_spacing[0],
             rect[1] + (side - text_size[1]) / 2.0,
         ];
-        draw_list.add_text(font, text_pos, display, style.text);
+        draw_list.add_text(font, face, text_pos, display, style.text);
     }
     toggled
 }
@@ -82,6 +94,7 @@ pub(crate) fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
 mod tests {
     use crate::context::Context;
     use crate::input::InputState;
+    use crate::scroll::ScrollFlags;
     use crate::ui::{Ui, TITLE_BAR_TAG};
     use crate::widgets::test_support::*;
 
@@ -127,14 +140,14 @@ mod tests {
     fn frame_w_b(ctx: &mut Context, mouse_pos: [f32; 2], left_down: bool, f: impl FnOnce(&mut Ui)) {
         ctx.set_input(InputState {
             mouse_pos,
-            mouse_down: [left_down, false, false],
+            mouse_down: [left_down, false, false, false, false],
             ..Default::default()
         });
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("W", f);
-            ui.window("B", |_| {});
+            ui.window("W", ScrollFlags::NONE, f);
+            ui.window("B", ScrollFlags::NONE, |_| {});
         }
         ctx.render();
     }

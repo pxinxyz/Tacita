@@ -59,7 +59,6 @@ impl UploadContext<'_> {
     ) {
         self.retired.push_back(Retired {
             fence: self.sync.last_signaled_value(),
-            // Every upload gets a fresh one-shot allocator + command list, retired with its staging buffer. Uploads never wait at all -- correctness comes from the queue being polite (in-order execution).
             kind: RetiredKind::CommandRecording(allocator, list),
         });
     }
@@ -85,6 +84,80 @@ pub(crate) struct TextureSet {
 }
 
 impl TextureSet {
+    pub(crate) fn resource_for(&self, id: TextureId) -> Option<&ID3D12Resource> {
+        if id.0 < 2 {
+            Some(&self.atlas.resource)
+        } else {
+            self.host.get(&id.0).map(|t| &t._texture.resource)
+        }
+    }
+    pub(crate) fn size_for(&self, id: TextureId) -> Option<[u32; 2]> {
+        let t = if id.0 < 2 {
+            &self.atlas
+        } else {
+            &self.host.get(&id.0)?._texture
+        };
+        Some([t.width, t.height])
+    }
+    pub(crate) fn add_gpu_texture(
+        &mut self,
+        ctx: &mut UploadContext,
+        id: TextureId,
+        resource: &ID3D12Resource,
+    ) -> Result<(), BackendError> {
+        if id.0 < 2 {
+            return Err(BackendError::ReservedTextureId(id.0));
+        }
+        let desc = unsafe { resource.GetDesc() };
+        if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            || desc.Width == 0
+            || desc.Width > 16384
+            || desc.Height == 0
+            || desc.Height > 16384
+            || desc.SampleDesc.Count != 1
+            || desc.DepthOrArraySize != 1
+            || desc.MipLevels != 1
+            || desc.Flags.0
+                & windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE.0
+                != 0
+            || !matches!(
+                desc.Format,
+                DXGI_FORMAT_R8G8B8A8_UNORM
+                    | windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM
+                    | windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+                    | windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+            )
+        {
+            return Err(BackendError::InvalidTextureData(
+                "GPU texture must be sampleable single-mip RGBA8/BGRA8 UNORM".into(),
+            ));
+        }
+        let mut owner: Option<Device> = None;
+        unsafe { resource.GetDevice(&mut owner) }.map_err(BackendError::TextureCreation)?;
+        if owner.as_ref() != Some(ctx.device) {
+            return Err(BackendError::InvalidTextureData(
+                "GPU texture belongs to another device".into(),
+            ));
+        }
+        let slot = self.take_slot()?;
+        self.create_srv(ctx.device, resource, slot);
+        let texture = Texture {
+            resource: resource.clone(),
+            width: desc.Width as u32,
+            height: desc.Height,
+        };
+        if let Some(old) = self.host.insert(
+            id.0,
+            HostTexture {
+                _texture: texture,
+                slot,
+            },
+        ) {
+            ctx.retire_texture_slot(old._texture.resource, old.slot);
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(ctx: &mut UploadContext) -> Result<Self, BackendError> {
         let desc = D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -102,7 +175,7 @@ impl TextureSet {
         let gpu_start = unsafe { heap.GetGPUDescriptorHandleForHeapStart() };
 
         let white = [255u8, 255, 255, 255];
-        let atlas = upload_texture(ctx, None, &white, 1, 1)?;
+        let atlas = upload_texture(ctx, None, &white, 1, 1, crate::TextureEncoding::Linear)?;
         let set = Self {
             heap,
             descriptor_size,
@@ -165,11 +238,25 @@ impl TextureSet {
             rgba.extend_from_slice(&[255, 255, 255, a]);
         }
         if self.atlas.width == width && self.atlas.height == height {
-            self.atlas = upload_texture(ctx, Some(&self.atlas), &rgba, width, height)?;
+            self.atlas = upload_texture(
+                ctx,
+                Some(&self.atlas),
+                &rgba,
+                width,
+                height,
+                crate::TextureEncoding::Linear,
+            )?;
             return Ok(());
         }
         let slot = self.take_slot()?;
-        let atlas = match upload_texture(ctx, None, &rgba, width, height) {
+        let atlas = match upload_texture(
+            ctx,
+            None,
+            &rgba,
+            width,
+            height,
+            crate::TextureEncoding::Linear,
+        ) {
             Ok(atlas) => atlas,
             Err(e) => {
                 self.free_slots.push(slot);
@@ -183,13 +270,14 @@ impl TextureSet {
         Ok(())
     }
 
-    pub(crate) fn add_host_texture(
+    pub(crate) fn add_host_texture_encoded(
         &mut self,
         ctx: &mut UploadContext,
         id: TextureId,
         rgba: &[u8],
         width: u32,
         height: u32,
+        encoding: crate::TextureEncoding,
     ) -> Result<(), BackendError> {
         if id == TextureId::FONT || id == TextureId::WHITE {
             return Err(BackendError::ReservedTextureId(id.0));
@@ -203,7 +291,7 @@ impl TextureSet {
             )));
         }
         let slot = self.take_slot()?;
-        let texture = match upload_texture(ctx, None, rgba, width, height) {
+        let texture = match upload_texture(ctx, None, rgba, width, height, encoding) {
             Ok(texture) => texture,
             Err(e) => {
                 self.free_slots.push(slot);
@@ -225,7 +313,7 @@ impl TextureSet {
 
     fn create_srv(&self, device: &Device, resource: &ID3D12Resource, slot: u32) {
         let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            Format: unsafe { resource.GetDesc() }.Format,
             ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
             Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
             Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
@@ -259,10 +347,11 @@ fn upload_texture(
     rgba: &[u8],
     width: u32,
     height: u32,
+    encoding: crate::TextureEncoding,
 ) -> Result<Texture, BackendError> {
     let texture = match existing {
         Some(texture) => texture.resource.clone(),
-        None => create_texture_resource(ctx.device, width, height)?,
+        None => create_texture_resource(ctx.device, width, height, encoding)?,
     };
 
     let row_bytes = width as usize * 4;
@@ -350,6 +439,7 @@ fn create_texture_resource(
     device: &Device,
     width: u32,
     height: u32,
+    encoding: crate::TextureEncoding,
 ) -> Result<ID3D12Resource, BackendError> {
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -358,7 +448,11 @@ fn create_texture_resource(
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: 1,
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        Format: if encoding == crate::TextureEncoding::Srgb {
+            windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        } else {
+            DXGI_FORMAT_R8G8B8A8_UNORM
+        },
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,

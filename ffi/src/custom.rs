@@ -1,9 +1,11 @@
 use restricted_gui::id::Id;
 
-use crate::{active_frame_ctx, gui_export, str_arg, GuiContext, GuiErrorCode, GuiRect, GuiVec2};
+use crate::{
+    active_frame_ctx, gui_export, str_arg, GuiContext, GuiDragPayload, GuiErrorCode, GuiRect,
+    GuiVec2,
+};
 
 #[no_mangle]
-// The escape hatch: hosts build first-class widgets through the FFI with these primitives. With great pointer arithmetic comes great responsibility.
 pub unsafe extern "C" fn gui_widget_id(
     ctx: *mut GuiContext,
     label: *const u8,
@@ -90,6 +92,108 @@ pub unsafe extern "C" fn gui_is_captured(ctx: *mut GuiContext, id: u64) -> bool 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn gui_focusable(ctx: *mut GuiContext, id: u64, rect: GuiRect) {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return;
+            };
+            gui.ctx.ui().focusable(Id(id), rect.into());
+        },
+        ()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_is_focused(ctx: *mut GuiContext, id: u64) -> bool {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return false;
+            };
+            gui.ctx.ui().is_focused(Id(id))
+        },
+        false
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_focus(ctx: *mut GuiContext, id: u64) {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return;
+            };
+            gui.ctx.ui().focus(Id(id));
+        },
+        ()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_keyboard_activated(ctx: *mut GuiContext, id: u64) -> bool {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return false;
+            };
+            gui.ctx.ui().keyboard_activated(Id(id))
+        },
+        false
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_drag_source(
+    ctx: *mut GuiContext,
+    id: u64,
+    rect: GuiRect,
+    payload: GuiDragPayload,
+) -> bool {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return false;
+            };
+            let Some(payload) = payload.decode() else {
+                crate::set_last_error(GuiErrorCode::InvalidInput);
+                return false;
+            };
+            gui.ctx.ui().drag_source(Id(id), rect.into(), payload)
+        },
+        false
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_drag_target(
+    ctx: *mut GuiContext,
+    rect: GuiRect,
+    type_id: u64,
+    out: *mut GuiDragPayload,
+) -> bool {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return false;
+            };
+            if out.is_null() {
+                crate::set_last_error(GuiErrorCode::InvalidInput);
+                return false;
+            }
+            let Some(payload) = gui.ctx.ui().drag_target(rect.into(), type_id) else {
+                return false;
+            };
+            unsafe {
+                *out = payload.into();
+            }
+            true
+        },
+        false
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn gui_mouse_pos(ctx: *mut GuiContext) -> GuiVec2 {
     gui_export!(
         || {
@@ -104,7 +208,7 @@ pub unsafe extern "C" fn gui_mouse_pos(ctx: *mut GuiContext) -> GuiVec2 {
 
 unsafe fn mouse_button_ctx<'a>(ctx: *mut GuiContext, button: usize) -> Option<&'a mut GuiContext> {
     let gui = unsafe { active_frame_ctx(ctx) }?;
-    if button >= 3 {
+    if button >= 5 {
         crate::set_last_error(GuiErrorCode::InvalidInput);
         return None;
     }
@@ -279,6 +383,14 @@ mod tests {
         let ctx = new_context();
         window_frame(ctx, AWAY, false, |ctx| {
             assert!(!unsafe { crate::gui_mouse_down(ctx, 3) });
+            assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+            assert!(!unsafe { crate::gui_mouse_pressed(ctx, 4) });
+            assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+            assert!(!unsafe { crate::gui_mouse_released(ctx, 4) });
+            assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        });
+        window_frame(ctx, AWAY, false, |ctx| {
+            assert!(!unsafe { crate::gui_mouse_down(ctx, 5) });
             assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
         });
         window_frame(ctx, AWAY, false, |ctx| {
@@ -289,6 +401,36 @@ mod tests {
             assert!(!unsafe { crate::gui_mouse_released(ctx, 99) });
             assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
         });
+        unsafe { crate::gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn thumb_button_state_flows_through_the_queries() {
+        let ctx = new_context();
+        let at = [100.0, 100.0];
+        let (mut down, mut pressed, mut released) = (false, false, true);
+
+        let mut input = input_at(at, false);
+        input.mouse_down[3] = 1;
+        frame(ctx, &input, |ctx| {
+            assert!(unsafe {
+                crate::gui_begin_window(ctx, b"W".as_ptr(), 1, crate::GUI_SCROLL_NONE)
+            });
+            unsafe {
+                down = crate::gui_mouse_down(ctx, 3);
+                pressed = crate::gui_mouse_pressed(ctx, 3);
+                released = crate::gui_mouse_released(ctx, 3);
+            }
+            unsafe { crate::gui_end_window(ctx) };
+        });
+        assert!(down && pressed && !released);
+
+        window_frame(ctx, at, false, |ctx| unsafe {
+            down = crate::gui_mouse_down(ctx, 3);
+            pressed = crate::gui_mouse_pressed(ctx, 3);
+            released = crate::gui_mouse_released(ctx, 3);
+        });
+        assert!(!down && !pressed && released);
         unsafe { crate::gui_context_free(ctx) };
     }
 

@@ -1,8 +1,12 @@
-use crate::context::{Context, ScrollRegionEntry, TabBarScopeState, WidgetState, MIN_WINDOW_SIZE};
+use crate::context::{Context, TabBarScopeState, WidgetState, MIN_WINDOW_SIZE};
 use crate::draw::TextureId;
+use crate::font::FontId;
 use crate::id::{split_label, Id};
 use crate::input::{Key, KeyBinding, KeyEvent};
 use crate::layout::Cursor;
+use crate::scroll::{ScrollContainerEntry, ScrollFlags};
+use crate::style::Style;
+use alloc::vec::Vec;
 
 pub(crate) const TITLE_BAR_TAG: &str = "##titlebar";
 
@@ -14,7 +18,6 @@ pub(crate) const RESIZE_GRIP_SIZE: f32 = 16.0;
 
 const CLOSE_GLYPH_INSET: f32 = 5.0;
 
-// 32 pixels of title bar must stay reachable at all times. Why 32? Because smaller let a window escape once and we don't talk about it.
 const DRAG_VIEWPORT_MARGIN: f32 = 32.0;
 
 const COLOR_EDIT_CHECKER_CELL: f32 = 4.0;
@@ -30,6 +33,122 @@ pub(crate) const COLOR_PICKER_SV_WIDTH_RATIO: f32 = 1.1;
 
 pub(crate) fn color_picker_column_height(row_h: f32, spacing_y: f32) -> f32 {
     (COLOR_EDIT_PREVIEW_ROWS + 5.0) * row_h + 5.0 * spacing_y
+}
+
+#[cfg(test)]
+mod overlay_contract_tests {
+    use crate::{context::Context, id::Id, input::InputState, scroll::ScrollFlags};
+
+    const FONT: &[u8] = include_bytes!("../tests/assets/DejaVuSans.ttf");
+
+    fn frame(
+        ctx: &mut Context,
+        mouse: [f32; 2],
+        buttons: [bool; 5],
+        dt: f32,
+        declare: impl FnOnce(&mut crate::ui::Ui<'_>),
+    ) {
+        ctx.set_input(InputState {
+            mouse_pos: mouse,
+            mouse_down: buttons,
+            viewport_size: [500.0, 400.0],
+            ..InputState::default()
+        });
+        ctx.new_frame(dt);
+        declare(&mut ctx.ui());
+        ctx.render();
+    }
+
+    #[test]
+    fn context_menu_anchors_at_right_press_and_keeps_popup_scope_balanced() {
+        let mut ctx = Context::new(FONT).expect("font");
+        let menu = Id(88);
+        frame(
+            &mut ctx,
+            [120.0, 100.0],
+            [false, true, false, false, false],
+            0.016,
+            |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    assert!(ui.begin_context_menu(menu, [100.0, 80.0, 180.0, 130.0], [90.0, 70.0]));
+                    ui.label("Menu item");
+                    ui.end_popup();
+                });
+            },
+        );
+        assert_eq!(ctx.popup_anchor, [120.0, 100.0]);
+        assert_eq!(ctx.popup_rect, Some([120.0, 100.0, 210.0, 170.0]));
+        assert!(!ctx.popup_scope_active);
+    }
+
+    #[test]
+    fn modal_blocks_outside_press_but_accepts_content_click() {
+        let mut ctx = Context::new(FONT).expect("font");
+        ctx.set_window_rect("W", [0.0, 0.0], [400.0, 350.0]);
+        let modal = Id(91);
+        frame(&mut ctx, [0.0, 0.0], [false; 5], 0.016, |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| ui.open_modal(modal));
+        });
+        frame(
+            &mut ctx,
+            [50.0, 100.0],
+            [true, false, false, false, false],
+            0.016,
+            |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    assert!(!ui.mouse_pressed(0));
+                    assert!(!ui.is_hovered([40.0, 90.0, 90.0, 120.0]));
+                    ui.modal(modal, [220.0, 160.0, 380.0, 280.0], |ui| {
+                        ui.button("Accept");
+                    });
+                });
+            },
+        );
+        assert_eq!(ctx.open_popup, Some(modal));
+        frame(&mut ctx, [230.0, 175.0], [false; 5], 0.016, |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.modal(modal, [220.0, 160.0, 380.0, 280.0], |ui| {
+                    ui.button("Accept");
+                })
+            });
+        });
+        frame(
+            &mut ctx,
+            [230.0, 175.0],
+            [true, false, false, false, false],
+            0.016,
+            |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    ui.modal(modal, [220.0, 160.0, 380.0, 280.0], |ui| {
+                        assert!(!ui.button("Accept"));
+                    })
+                });
+            },
+        );
+        frame(&mut ctx, [230.0, 175.0], [false; 5], 0.016, |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.modal(modal, [220.0, 160.0, 380.0, 280.0], |ui| {
+                    assert!(ui.button("Accept"));
+                })
+            });
+        });
+    }
+
+    #[test]
+    fn toast_is_inert_and_expires_after_elapsed_frame_time() {
+        let mut ctx = Context::new(FONT).expect("font");
+        frame(&mut ctx, [0.0, 0.0], [false; 5], 0.016, |ui| {
+            ui.toast("Saved", 0.2)
+        });
+        assert_eq!(ctx.toasts.len(), 1);
+        frame(&mut ctx, [0.0, 0.0], [false; 5], 0.1, |_| {});
+        assert_eq!(ctx.toasts.len(), 1);
+        assert!(!ctx.overlay.as_draw_data().vertices.is_empty());
+        frame(&mut ctx, [0.0, 0.0], [false; 5], 0.11, |_| {});
+        frame(&mut ctx, [0.0, 0.0], [false; 5], 0.01, |_| {});
+        assert!(ctx.toasts.is_empty());
+        assert!(ctx.overlay.as_draw_data().vertices.is_empty());
+    }
 }
 
 pub(crate) const COLOR_PICKER_HUE_STRIP_WIDTH: f32 = 16.0;
@@ -55,15 +174,107 @@ pub struct Ui<'a> {
     pub(crate) ctx: &'a mut Context,
 }
 
+pub struct DisabledScope {
+    id: Id,
+    disabled: bool,
+    masked: bool,
+    style: Style,
+    mouse_pos: [f32; 2],
+    mouse_down: [bool; 5],
+    prev_mouse_down: [bool; 5],
+    mouse_wheel: f32,
+    keys: Option<Vec<KeyEvent>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationState {
+    Success,
+    Warning,
+    Error,
+}
+
 impl Ui<'_> {
-    pub fn window(&mut self, title: &str, f: impl FnOnce(&mut Ui)) {
-        if self.begin_window(title) {
+    pub fn disabled(&mut self, label: &str, disabled: bool, f: impl FnOnce(&mut Ui)) {
+        let scope = self.begin_disabled(label, disabled);
+        f(self);
+        self.end_disabled(scope);
+    }
+
+    pub fn begin_disabled(&mut self, label: &str, disabled: bool) -> DisabledScope {
+        let ctx = &mut *self.ctx;
+        let id = ctx.id_stack.id(label);
+        ctx.id_stack.push_id(id);
+        ctx.disabled_groups.push(id);
+        if disabled && ctx.active_groups.contains(&id) {
+            ctx.clear_active();
+        }
+        let masked = disabled && ctx.disabled_depth == 0;
+        let mut scope = DisabledScope {
+            id,
+            disabled,
+            masked,
+            style: ctx.style,
+            mouse_pos: ctx.input.mouse_pos,
+            mouse_down: ctx.input.mouse_down,
+            prev_mouse_down: ctx.prev_mouse_down,
+            mouse_wheel: ctx.input.mouse_wheel,
+            keys: None,
+        };
+        if disabled {
+            ctx.disabled_depth += 1;
+        }
+        if masked {
+            let fade = |c: &mut [u8; 4]| c[3] = ((c[3] as u16 * 110) / 255) as u8;
+            fade(&mut ctx.style.window_bg);
+            fade(&mut ctx.style.title_bg);
+            fade(&mut ctx.style.title_text);
+            fade(&mut ctx.style.widget_bg);
+            fade(&mut ctx.style.widget_bg_hovered);
+            fade(&mut ctx.style.widget_bg_active);
+            fade(&mut ctx.style.text);
+            fade(&mut ctx.style.scrollbar_bg);
+            fade(&mut ctx.style.scrollbar_thumb);
+            fade(&mut ctx.style.scrollbar_thumb_hovered);
+            fade(&mut ctx.style.scrollbar_thumb_active);
+            ctx.input.mouse_pos = [f32::NAN; 2];
+            ctx.input.mouse_down = [false; 5];
+            ctx.prev_mouse_down = [false; 5];
+            ctx.input.mouse_wheel = 0.0;
+            scope.keys = Some(core::mem::take(&mut ctx.input.keys));
+        }
+        scope
+    }
+
+    pub fn end_disabled(&mut self, scope: DisabledScope) {
+        let ctx = &mut *self.ctx;
+        assert_eq!(
+            ctx.disabled_groups.pop(),
+            Some(scope.id),
+            "disabled scopes must close in reverse order"
+        );
+        ctx.id_stack.pop();
+        if scope.masked {
+            ctx.style = scope.style;
+        }
+        if scope.masked {
+            ctx.input.mouse_pos = scope.mouse_pos;
+            ctx.input.mouse_down = scope.mouse_down;
+            ctx.prev_mouse_down = scope.prev_mouse_down;
+            ctx.input.mouse_wheel = scope.mouse_wheel;
+            ctx.input.keys = scope.keys.expect("masked disabled scope owns input keys");
+        }
+        if scope.disabled {
+            ctx.disabled_depth -= 1;
+        }
+    }
+    pub fn window(&mut self, title: &str, flags: ScrollFlags, f: impl FnOnce(&mut Ui)) {
+        if self.begin_window(title, flags) {
             f(self);
             self.end_window();
         }
     }
 
-    pub fn begin_window(&mut self, title: &str) -> bool {
+    pub fn begin_window(&mut self, title: &str, flags: ScrollFlags) -> bool {
         let ctx = &mut *self.ctx;
         assert!(
             ctx.current_window.is_none(),
@@ -76,12 +287,15 @@ impl Ui<'_> {
         }
         let window_id = ctx.windows[index].id;
         ctx.id_stack.push(title);
+        ctx.id_stack.inspector.scope_rect(ctx.windows[index].rect());
+        ctx.id_stack.semantics.scope_rect(ctx.windows[index].rect());
         let chrome_id = ctx.id_stack.id(TITLE_BAR_TAG);
         let close_id = ctx.id_stack.id(CLOSE_BUTTON_TAG);
         let resize_id = ctx.id_stack.id(RESIZE_GRIP_TAG);
 
         let style = ctx.style;
-        let title_bar_height = ctx.font().line_height() + 2.0 * style.frame_padding[1];
+        let face = ctx.active_font();
+        let title_bar_height = ctx.font().line_height_in(face) + 2.0 * style.frame_padding[1];
         let mouse = ctx.input.mouse_pos;
         let viewport_size = ctx.input.viewport_size;
         let left_down = ctx.input.mouse_down[0];
@@ -174,13 +388,49 @@ impl Ui<'_> {
         let close_hovered = hovered(ctx, close_rect);
         let close_pressed = ctx.active == Some(close_id) && point_in_rect(mouse, close_rect);
 
+        let body_rect = {
+            let window = &ctx.windows[index];
+            [
+                window.pos[0],
+                window.pos[1] + title_bar_height,
+                window.pos[0] + window.size[0],
+                window.pos[1] + window.size[1],
+            ]
+        };
+        ctx.id_stack.semantics.scope_rect(ctx.windows[index].rect());
+        let content_height = ctx.windows[index].content_height;
+        let geometry = crate::scroll::geometry(&style, body_rect, 0.0, flags, content_height);
+        let content_rect = geometry.content_rect;
+        let scrollbar_rect = geometry.scrollbar_rect;
+        if flags.scrollable {
+            ctx.scroll_containers.push(ScrollContainerEntry {
+                id: window_id,
+                target: crate::scroll::ScrollTarget::Window,
+                rect: body_rect,
+                layer_owns_point: hover_layer_gate(ctx),
+                max_offset: geometry.max_offset,
+                line_height: ctx.font.line_height_in(face),
+            });
+        }
+        let mut offset = ctx.windows[index]
+            .scroll_offset
+            .clamp(0.0, geometry.max_offset);
+        if flags.scrollable {
+            offset = ctx.scroll_position(ctx.windows[index].id, offset, geometry.max_offset);
+            ctx.windows[index].scroll_offset = offset;
+        }
+        let content_width = match scrollbar_rect {
+            Some(bar) => bar[0] - body_rect[0],
+            None => ctx.windows[index].size[0],
+        };
+
         {
             let font = &mut ctx.font;
             let window = &mut ctx.windows[index];
             window.draw_list.push_clip_rect(window.rect());
             window.cursor = Cursor::new(
-                [window.pos[0], window.pos[1] + title_bar_height],
-                window.size[0],
+                [window.pos[0], window.pos[1] + title_bar_height - offset],
+                content_width,
                 style.window_padding,
                 style.item_spacing,
             );
@@ -219,16 +469,16 @@ impl Ui<'_> {
             let display = split_label(title).0;
             let max_text_width = close_rect[0] - text_pos[0];
             let mut text = display;
-            if font.measure(text)[0] > max_text_width {
+            if font.measure_in(face, text)[0] > max_text_width {
                 let mut len = text.len();
-                while len > 0 && font.measure(&text[..len])[0] > max_text_width {
+                while len > 0 && font.measure_in(face, &text[..len])[0] > max_text_width {
                     len = text[..len].char_indices().next_back().map_or(0, |(i, _)| i);
                 }
                 text = &text[..len];
             }
             window
                 .draw_list
-                .add_text(font, text_pos, text, style.title_text);
+                .add_text(font, face, text_pos, text, style.title_text);
             let g0 = [
                 close_rect[0] + CLOSE_GLYPH_INSET,
                 close_rect[1] + CLOSE_GLYPH_INSET,
@@ -248,20 +498,33 @@ impl Ui<'_> {
                 1.0,
                 aa,
             );
-            window.draw_list.add_filled_polygon(
-                &[
-                    [rect[2], rect[3] - RESIZE_GRIP_SIZE],
-                    [rect[2], rect[3]],
-                    [rect[2] - RESIZE_GRIP_SIZE, rect[3]],
-                ],
-                style.title_text,
-                aa,
-            );
         }
-        let suppress_press = (!is_press_target
-            && ctx.press_target != crate::context::PressTarget::None)
-            || grip_pressed;
-        ctx.window_scope_saved_prev_left = ctx.prev_mouse_down[0];
+        let suppress_press = ctx.popup_modal
+            || (!is_press_target && ctx.press_target != crate::context::PressTarget::None)
+            || grip_pressed
+            || (flags.scrollable && !point_in_rect(mouse, content_rect));
+
+        if flags.scrollable {
+            ctx.windows[index].draw_list.push_clip_rect(content_rect);
+        }
+
+        let saved_interaction_clip = ctx.interaction_clip;
+        if flags.scrollable {
+            ctx.interaction_clip = Some(match saved_interaction_clip {
+                Some(outer) => crate::draw::intersect_rects(outer, content_rect),
+                None => content_rect,
+            });
+        }
+
+        ctx.window_scope = Some(crate::context::WindowScopeState {
+            flags,
+            body_rect,
+            content_origin_y: body_rect[1] - offset,
+            item_spacing_y: style.item_spacing[1],
+            scrollbar_rect,
+            saved_interaction_clip,
+            saved_prev_left: ctx.prev_mouse_down[0],
+        });
         if suppress_press {
             ctx.prev_mouse_down[0] = true;
         }
@@ -274,11 +537,94 @@ impl Ui<'_> {
             "Ui::end_window called with no window open: every end_window \
              must follow a begin_window that returned true",
         );
-        ctx.prev_mouse_down[0] = ctx.window_scope_saved_prev_left;
-        ctx.current_window = None;
+        let scope = ctx
+            .window_scope
+            .take()
+            .expect("an open window scope always carries its begin-half state");
+        let end_y = ctx.current_window_mut().cursor.pos_y();
+        let content_height = (end_y - scope.content_origin_y - scope.item_spacing_y).max(0.0);
+        ctx.prev_mouse_down[0] = scope.saved_prev_left;
+        ctx.interaction_clip = scope.saved_interaction_clip;
         let index = ctx.window_index(window_id);
-        ctx.windows[index].draw_list.pop_clip_rect();
+        ctx.windows[index].content_height = content_height;
+        if scope.flags.scrollable {
+            ctx.windows[index].draw_list.pop_clip_rect();
+        }
+        match scope.scrollbar_rect {
+            Some(track) if scope.flags.scrollable && scope.flags.scrollbar => {
+                let bar_id = ctx.id_stack.id(crate::scroll::SCROLLBAR_TAG);
+                let visible_height = (scope.body_rect[3] - scope.body_rect[1]).max(0.0);
+                let offset = ctx.windows[index].scroll_offset;
+                let offset = crate::scroll::scrollbar(
+                    ctx,
+                    bar_id,
+                    track,
+                    offset,
+                    (content_height - visible_height).max(0.0),
+                    visible_height,
+                    content_height,
+                );
+                if offset != ctx.windows[index].scroll_offset
+                    || ctx.active == Some(bar_id)
+                    || (ctx.hot == Some(bar_id)
+                        && ctx.input.mouse_down[0]
+                        && !ctx.prev_mouse_down[0])
+                {
+                    ctx.scroll_snap(ctx.windows[index].id, offset);
+                }
+                ctx.windows[index].scroll_offset = offset;
+            }
+            _ => {}
+        }
+        ctx.current_window = None;
+        let style = ctx.style;
+        let window = &mut ctx.windows[index];
+        let rect = window.rect();
+        let r = if style.corner_rounding.is_finite() {
+            style
+                .corner_rounding
+                .min((rect[2] - rect[0]).min(rect[3] - rect[1]) / 2.0)
+        } else {
+            0.0
+        };
+        let inset = if r > 0.0 {
+            r * (1.0 - core::f32::consts::FRAC_1_SQRT_2)
+        } else {
+            0.0
+        };
+        window.draw_list.add_filled_polygon(
+            &[
+                [rect[2] - inset, rect[3] - RESIZE_GRIP_SIZE],
+                [rect[2] - inset, rect[3] - inset],
+                [rect[2] - RESIZE_GRIP_SIZE, rect[3] - inset],
+            ],
+            style.title_text,
+            style.anti_aliasing,
+        );
+        window.draw_list.pop_clip_rect();
         ctx.id_stack.pop();
+    }
+
+    pub fn push_font(&mut self, id: FontId) {
+        assert!(
+            self.ctx.font.is_valid(id),
+            "Ui::push_font called with an unknown FontId: faces come from \
+             Context::add_font / Context::add_font_with_icons"
+        );
+        self.ctx.font_stack.push(id);
+    }
+
+    pub fn pop_font(&mut self) {
+        self.ctx.font_stack.pop().expect(
+            "Ui::pop_font called with no font scope open: every pop_font \
+             must follow a Ui::push_font",
+        );
+    }
+
+    pub fn with_font(&mut self, id: FontId, f: impl FnOnce(&mut Ui)) {
+        self.push_font(id);
+        f(self);
+        self.pop_font();
     }
 
     pub fn label(&mut self, text: &str) {
@@ -289,8 +635,178 @@ impl Ui<'_> {
         crate::widgets::button::button(self, label)
     }
 
+    pub fn icon_button(&mut self, label: &str, side: f32) -> bool {
+        crate::widgets::button::icon_button(self, label, side)
+    }
+
+    pub fn separator(&mut self) {
+        crate::widgets::decorations::separator(self);
+    }
+
+    pub fn color_swatch(&mut self, label: &str, color: [u8; 4], size: [f32; 2]) {
+        crate::widgets::decorations::color_swatch(self, label, color, size);
+    }
+
+    pub fn status_badge(&mut self, label: &str, color: [u8; 4]) {
+        crate::widgets::decorations::status_badge(self, label, color);
+    }
+
+    pub fn hotkey_hint(&mut self, label: &str) {
+        crate::widgets::decorations::hotkey_hint(self, label);
+    }
+
     pub fn checkbox(&mut self, label: &str, value: &mut bool) -> bool {
         crate::widgets::checkbox::checkbox(self, label, value)
+    }
+
+    pub fn pill_toggle(&mut self, label: &str, value: &mut bool) -> bool {
+        crate::widgets::choice_controls::pill_toggle(self, label, value)
+    }
+
+    pub fn segmented_control(&mut self, label: &str, items: &[&str], selected: &mut usize) -> bool {
+        crate::widgets::choice_controls::segmented_control(self, label, items, selected)
+    }
+
+    pub fn radio_button(&mut self, label: &str, selected: &mut usize, index: usize) -> bool {
+        crate::widgets::radio::radio_button(self, label, selected, index)
+    }
+
+    pub fn validation_message(&mut self, state: ValidationState, message: &str) {
+        crate::widgets::form_nav::validation_message(self, state, message);
+    }
+
+    pub fn nav_row(&mut self, label: &str, selected: &mut usize, index: usize) -> bool {
+        crate::widgets::form_nav::nav_row(self, label, selected, index)
+    }
+
+    pub fn breadcrumbs(&mut self, label: &str, items: &[&str], selected: &mut usize) -> bool {
+        crate::widgets::form_nav::breadcrumbs(self, label, items, selected)
+    }
+
+    pub fn search_box(&mut self, label: &str, query: &mut alloc::string::String) -> bool {
+        let ctx = &mut *self.ctx;
+        let id = ctx.id_stack.id(label);
+        let style = ctx.style;
+        let face = ctx.active_font();
+        let width = crate::widgets::available_width(ctx).max(0.0);
+        let height = ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
+        let rect = crate::widgets::item_rect(ctx, [width, height]);
+        {
+            let (font, draw) = crate::widgets::draw_parts(ctx);
+            crate::widgets::chrome_fill(font, draw, style.corner_rounding, rect, style.widget_bg);
+            if style.border_size > 0.0 {
+                crate::widgets::draw_border(
+                    font,
+                    draw,
+                    style.corner_rounding,
+                    rect,
+                    style.border_size,
+                    crate::widgets::lighten(style.widget_bg, crate::widgets::BORDER_LIGHTEN),
+                );
+            }
+        }
+        ctx.id_stack.push_id(id);
+        let query_id = ctx.id_stack.id("##query");
+        let popup_scope = ctx.popup_scope_active;
+        let saved_cursor = if popup_scope {
+            ctx.overlay_cursor
+        } else {
+            ctx.current_window_mut().cursor
+        };
+        let inner_width = (width - 46.0).max(0.0);
+        if popup_scope {
+            ctx.overlay_cursor
+                .enter_region([rect[0] + 22.0, rect[1]], inner_width);
+        } else {
+            ctx.current_window_mut()
+                .cursor
+                .enter_region([rect[0] + 22.0, rect[1]], inner_width);
+        }
+        let changed = crate::widgets::text_input::embedded_text_input(self, "##query", query);
+        let ctx = &mut *self.ctx;
+        if popup_scope {
+            ctx.overlay_cursor = saved_cursor;
+        } else {
+            ctx.current_window_mut().cursor = saved_cursor;
+        }
+        let search_col = style.text;
+        let icon_x = rect[0] + 10.0;
+        let icon_y = (rect[1] + rect[3]) * 0.5 - 1.5;
+        let center = [icon_x, icon_y];
+        let (font, draw) = crate::widgets::draw_parts(ctx);
+        if !crate::widgets::radio::circle_mask(
+            font,
+            draw,
+            crate::font::ShapeKey::ring(5.0, 1.5),
+            center,
+            search_col,
+        ) {
+            draw.add_circle_outline(center, 5.0, search_col, 1.5, style.anti_aliasing);
+        }
+        draw.add_thick_line_with_caps(
+            [icon_x + 3.7, icon_y + 3.7],
+            [icon_x + 7.5, icon_y + 7.5],
+            search_col,
+            1.5,
+            style.anti_aliasing,
+        );
+        if query.is_empty() && ctx.active != Some(query_id) {
+            let display = split_label(label).0;
+            let mut placeholder = style.text;
+            placeholder[3] /= 2;
+            let (font, draw) = crate::widgets::draw_parts(ctx);
+            draw.add_text(
+                font,
+                face,
+                [
+                    rect[0] + 22.0 + style.frame_padding[0],
+                    rect[1] + style.frame_padding[1],
+                ],
+                display,
+                placeholder,
+            );
+        }
+        let clear_id = ctx.id_stack.id("##clear");
+        let clear_rect = [rect[2] - 24.0, rect[1], rect[2], rect[3]];
+        let inside = !query.is_empty()
+            && point_in_rect(ctx.input.mouse_pos, clear_rect)
+            && hover_layer_gate(ctx);
+        let down = ctx.input.mouse_down[0];
+        if inside && down && !ctx.prev_mouse_down[0] {
+            ctx.set_active(clear_id);
+        }
+        let held = ctx.active == Some(clear_id);
+        let clear = held && !down && inside;
+        if held && !down {
+            ctx.clear_active();
+        }
+        if !query.is_empty() && hovered(ctx, clear_rect) {
+            ctx.hot = Some(clear_id);
+        }
+        if !query.is_empty() {
+            let (font, draw) = crate::widgets::draw_parts(ctx);
+            draw.add_text(
+                font,
+                face,
+                [clear_rect[0] + 6.0, rect[1] + style.frame_padding[1]],
+                "×",
+                search_col,
+            );
+        }
+        if clear {
+            query.clear();
+        }
+        ctx.id_stack.pop();
+        crate::widgets::register_item(ctx, id, rect);
+        changed || clear
+    }
+
+    pub fn progress_bar(&mut self, label: &str, fraction: f32, size: [f32; 2]) {
+        crate::widgets::progress::progress_bar(self, label, fraction, size)
+    }
+
+    pub fn spinner(&mut self, label: &str, diameter: f32, phase: f32) {
+        crate::widgets::spinner::spinner(self, label, diameter, phase)
     }
 
     pub fn slider_float(
@@ -302,6 +818,15 @@ impl Ui<'_> {
         crate::widgets::slider::slider_float(self, label, value, range)
     }
 
+    pub fn filled_slider_float(
+        &mut self,
+        label: &str,
+        value: &mut f32,
+        range: core::ops::RangeInclusive<f32>,
+    ) -> bool {
+        crate::widgets::slider::filled_slider_float(self, label, value, range)
+    }
+
     pub fn slider_int(
         &mut self,
         label: &str,
@@ -309,6 +834,55 @@ impl Ui<'_> {
         range: core::ops::RangeInclusive<i32>,
     ) -> bool {
         crate::widgets::slider::slider_int(self, label, value, range)
+    }
+
+    pub fn filled_slider_int(
+        &mut self,
+        label: &str,
+        value: &mut i32,
+        range: core::ops::RangeInclusive<i32>,
+    ) -> bool {
+        crate::widgets::slider::filled_slider_int(self, label, value, range)
+    }
+
+    pub fn range_slider_float(
+        &mut self,
+        label: &str,
+        lower: &mut f32,
+        upper: &mut f32,
+        range: core::ops::RangeInclusive<f32>,
+    ) -> bool {
+        crate::widgets::range_slider::range_slider_float(self, label, lower, upper, range)
+    }
+
+    pub fn range_slider_int(
+        &mut self,
+        label: &str,
+        lower: &mut i32,
+        upper: &mut i32,
+        range: core::ops::RangeInclusive<i32>,
+    ) -> bool {
+        crate::widgets::range_slider::range_slider_int(self, label, lower, upper, range)
+    }
+
+    pub fn drag_float(
+        &mut self,
+        label: &str,
+        value: &mut f32,
+        speed: f32,
+        range: core::ops::RangeInclusive<f32>,
+    ) -> bool {
+        crate::widgets::drag_value::drag_float(self, label, value, speed, range)
+    }
+
+    pub fn drag_int(
+        &mut self,
+        label: &str,
+        value: &mut i32,
+        speed: f32,
+        range: core::ops::RangeInclusive<i32>,
+    ) -> bool {
+        crate::widgets::drag_value::drag_int(self, label, value, speed, range)
     }
 
     pub fn text_input(&mut self, label: &str, buf: &mut alloc::string::String) -> bool {
@@ -331,7 +905,7 @@ impl Ui<'_> {
             _ => 0,
         };
         let style = ctx.style;
-        let header_h = ctx.font.line_height() + 2.0 * style.frame_padding[1];
+        let header_h = ctx.font.line_height_in(ctx.active_font()) + 2.0 * style.frame_padding[1];
         let width = crate::widgets::available_width(ctx);
         let row = crate::widgets::item_rect(ctx, [width, header_h]);
         ctx.id_stack.push_id(id);
@@ -371,6 +945,137 @@ impl Ui<'_> {
         }
     }
 
+    pub fn tree_node(&mut self, label: &str, f: impl FnOnce(&mut Ui)) {
+        if let Some(scope) = self.begin_tree_node(label) {
+            f(self);
+            self.end_tree_node(scope);
+        }
+    }
+
+    pub fn begin_tree_node(&mut self, label: &str) -> Option<TreeNodeScope> {
+        let ctx = &mut *self.ctx;
+        let id = crate::widgets::widget_id(ctx, label);
+        let display = split_label(label).0;
+        let open = match ctx.widget_states.get(&id) {
+            Some(WidgetState::TreeNode { open }) => *open,
+            _ => false,
+        };
+        let style = ctx.style;
+        let face = ctx.active_font();
+        let line_height = ctx.font.line_height_in(face);
+        let arrow = line_height * 0.5;
+        let text_size = ctx.font.measure_in(face, display);
+        let row_height = line_height + 2.0 * style.frame_padding[1];
+        let row_width = 2.0 * style.frame_padding[0] + arrow + text_size[0];
+        let rect = crate::widgets::interactive_rect(ctx, [row_width, row_height]);
+        if ctx.accessibility_enabled() {
+            crate::widgets::register_focusable_item(ctx, id, rect);
+        } else {
+            crate::widgets::register_item(ctx, id, rect);
+        }
+        ctx.id_stack.semantics.describe(
+            id,
+            crate::accessibility::AccessibilityRole::TreeItem,
+            display,
+            if open {
+                crate::accessibility::AccessibilityState::EXPANDED
+            } else {
+                0
+            },
+            3,
+        );
+
+        let inside = point_in_rect(ctx.input.mouse_pos, ctx.target_rect(rect));
+        let down = ctx.input.mouse_down[0];
+        if inside && hover_layer_gate(ctx) && down && !ctx.prev_mouse_down[0] {
+            ctx.set_active(id);
+        }
+        let held = ctx.active == Some(id);
+        let clicked =
+            (held && !down && inside && hover_layer_gate(ctx)) || ctx.keyboard_activate == Some(id);
+        if held && !down {
+            ctx.clear_active();
+        }
+        let over = hovered(ctx, rect);
+        if over {
+            ctx.hot = Some(id);
+        }
+        let bg = if ctx.active == Some(id) && inside {
+            Some(style.widget_bg_active)
+        } else if over {
+            Some(style.widget_bg_hovered)
+        } else {
+            None
+        };
+        let ax = rect[0] + style.frame_padding[0];
+        let ay = rect[1] + (row_height - arrow) / 2.0;
+        let amount = ctx.motion_tween(
+            id,
+            crate::animation::COLLAPSE,
+            0.0,
+            if open { 1.0 } else { 0.0 },
+            ctx.motion.collapse,
+            ctx.motion.easing,
+        );
+        let tri = crate::animation::arrow_triangle(ax, ay, arrow, amount);
+        let text_pos = [
+            ax + arrow + style.frame_padding[0],
+            rect[1] + (row_height - text_size[1]) / 2.0,
+        ];
+        let bg = if ctx.motion.active() {
+            let mut idle = style.widget_bg_hovered;
+            idle[3] = 0;
+            Some(ctx.widget_color(id, bg.unwrap_or(idle)))
+        } else {
+            bg
+        };
+        let (font, draw_list) = crate::widgets::draw_parts(ctx);
+        if let Some(bg) = bg {
+            draw_list.add_filled_rect([rect[0], rect[1]], [rect[2], rect[3]], bg);
+        }
+        draw_list.add_filled_polygon(&tri, style.text, style.anti_aliasing);
+        draw_list.add_text(font, face, text_pos, display, style.text);
+
+        let indent = 2.0 * style.frame_padding[0] + arrow;
+        if open || amount > 0.0 {
+            ctx.id_stack.push_id(id);
+            if ctx.popup_scope_active {
+                ctx.overlay_cursor.indent(indent);
+            } else {
+                ctx.current_window_mut().cursor.indent(indent);
+            }
+            let motion = self.begin_collapse_motion(id, amount, !open || clicked);
+            Some(TreeNodeScope {
+                id,
+                open,
+                clicked,
+                indent,
+                motion,
+            })
+        } else {
+            ctx.widget_states
+                .insert(id, WidgetState::TreeNode { open: clicked });
+            None
+        }
+    }
+
+    pub fn end_tree_node(&mut self, scope: TreeNodeScope) {
+        self.end_collapse_motion(scope.motion);
+        let ctx = &mut *self.ctx;
+        if ctx.popup_scope_active {
+            ctx.overlay_cursor.unindent(scope.indent);
+        } else {
+            ctx.current_window_mut().cursor.unindent(scope.indent);
+        }
+        ctx.id_stack.pop();
+        ctx.widget_states.insert(
+            scope.id,
+            WidgetState::TreeNode {
+                open: scope.open ^ scope.clicked,
+            },
+        );
+    }
+
     pub fn collapsing_header(&mut self, title: &str, f: impl FnOnce(&mut Ui)) {
         if let Some(scope) = self.begin_collapsing_header(title) {
             f(self);
@@ -387,21 +1092,37 @@ impl Ui<'_> {
             _ => false,
         };
         let style = ctx.style;
-        let line_height = ctx.font.line_height();
+        let face = ctx.active_font();
+        let line_height = ctx.font.line_height_in(face);
         let header_h = line_height + 2.0 * style.frame_padding[1];
         let width = crate::widgets::available_width(ctx);
-        let rect = crate::widgets::item_rect(ctx, [width, header_h]);
-        crate::widgets::register_item(ctx, id, rect);
+        let rect = crate::widgets::interactive_rect(ctx, [width, header_h]);
+        if ctx.accessibility_enabled() {
+            crate::widgets::register_focusable_item(ctx, id, rect);
+        } else {
+            crate::widgets::register_item(ctx, id, rect);
+        }
+        ctx.id_stack.semantics.describe(
+            id,
+            crate::accessibility::AccessibilityRole::TreeItem,
+            display,
+            if open {
+                crate::accessibility::AccessibilityState::EXPANDED
+            } else {
+                0
+            },
+            3,
+        );
 
         let mouse = ctx.input.mouse_pos;
-        let inside = point_in_rect(mouse, rect);
+        let inside = point_in_rect(mouse, ctx.target_rect(rect));
         let left_down = ctx.input.mouse_down[0];
         let left_pressed = left_down && !ctx.prev_mouse_down[0];
         if inside && left_pressed {
             ctx.set_active(id);
         }
         let held = ctx.active == Some(id);
-        let mut clicked = false;
+        let mut clicked = ctx.keyboard_activate == Some(id);
         if held && !left_down {
             if inside {
                 clicked = true;
@@ -424,16 +1145,21 @@ impl Ui<'_> {
         let arrow = line_height * 0.5;
         let ax = rect[0] + style.frame_padding[0];
         let ay = rect[1] + (header_h - arrow) / 2.0;
-        let tri = if open {
-            [[ax, ay], [ax + arrow, ay], [ax + arrow / 2.0, ay + arrow]]
-        } else {
-            [[ax, ay], [ax, ay + arrow], [ax + arrow, ay + arrow / 2.0]]
-        };
-        let text_size = ctx.font.measure(display);
+        let amount = ctx.motion_tween(
+            id,
+            crate::animation::COLLAPSE,
+            0.0,
+            if open { 1.0 } else { 0.0 },
+            ctx.motion.collapse,
+            ctx.motion.easing,
+        );
+        let tri = crate::animation::arrow_triangle(ax, ay, arrow, amount);
+        let text_size = ctx.font.measure_in(face, display);
         let text_pos = [
             rect[0] + 2.0 * style.frame_padding[0] + arrow,
             rect[1] + (header_h - text_size[1]) / 2.0,
         ];
+        let bg = ctx.widget_color(id, bg);
         {
             let (font, draw_list) = crate::widgets::draw_parts(ctx);
             draw_list.add_filled_rect([rect[0], rect[1]], [rect[2], rect[3]], bg);
@@ -448,22 +1174,24 @@ impl Ui<'_> {
                 );
             }
             draw_list.add_filled_polygon(&tri, style.text, style.anti_aliasing);
-            draw_list.add_text(font, text_pos, display, style.text);
+            draw_list.add_text(font, face, text_pos, display, style.text);
         }
 
         let indent = 2.0 * style.frame_padding[0] + arrow;
-        if open {
+        if open || amount > 0.0 {
             ctx.id_stack.push_id(id);
             if ctx.popup_scope_active {
                 ctx.overlay_cursor.indent(indent);
             } else {
                 ctx.current_window_mut().cursor.indent(indent);
             }
+            let motion = self.begin_collapse_motion(id, amount, !open || clicked);
             Some(CollapsingHeaderScope {
                 id,
                 open,
                 clicked,
                 indent,
+                motion,
             })
         } else {
             ctx.widget_states.insert(
@@ -477,6 +1205,7 @@ impl Ui<'_> {
     }
 
     pub fn end_collapsing_header(&mut self, scope: CollapsingHeaderScope) {
+        self.end_collapse_motion(scope.motion);
         let ctx = &mut *self.ctx;
         if ctx.popup_scope_active {
             ctx.overlay_cursor.unindent(scope.indent);
@@ -492,13 +1221,59 @@ impl Ui<'_> {
         );
     }
 
-    pub fn scroll_region(&mut self, label: &str, size: [f32; 2], f: impl FnOnce(&mut Ui)) {
-        let scope = self.begin_scroll_region(label, size);
+    pub fn child(
+        &mut self,
+        label: &str,
+        size: [f32; 2],
+        flags: ScrollFlags,
+        f: impl FnOnce(&mut Ui),
+    ) {
+        let scope = self.begin_child(label, size, flags);
         f(self);
-        self.end_scroll_region(scope);
+        self.end_child(scope);
     }
 
-    pub fn begin_scroll_region(&mut self, label: &str, size: [f32; 2]) -> ScrollRegionScope {
+    pub fn group_box(&mut self, label: &str, size: [f32; 2], f: impl FnOnce(&mut Ui)) {
+        let scope = self.begin_group_box(label, size);
+        f(self);
+        self.end_group_box(scope);
+    }
+
+    pub fn begin_group_box(&mut self, label: &str, size: [f32; 2]) -> ChildScope {
+        let scope = self.begin_child(label, size, ScrollFlags::NONE);
+        self.label(label);
+        self.separator();
+        scope
+    }
+
+    pub fn end_group_box(&mut self, scope: ChildScope) {
+        self.end_child(scope);
+    }
+
+    pub fn preview_canvas(
+        &mut self,
+        label: &str,
+        size: [f32; 2],
+        f: impl FnOnce(&mut Ui, [f32; 4]),
+    ) {
+        let (scope, rect) = self.begin_preview_canvas(label, size);
+        f(self, rect);
+        self.end_preview_canvas(scope);
+    }
+
+    pub fn begin_preview_canvas(&mut self, label: &str, size: [f32; 2]) -> (ChildScope, [f32; 4]) {
+        let scope = self.begin_child(label, size, ScrollFlags::NONE);
+        let rect = scope.content_rect;
+        let col = self.ctx.style.window_bg;
+        self.draw_rect_filled([rect[0], rect[1]], [rect[2], rect[3]], col);
+        (scope, rect)
+    }
+
+    pub fn end_preview_canvas(&mut self, scope: ChildScope) {
+        self.end_child(scope);
+    }
+
+    pub fn begin_child(&mut self, label: &str, size: [f32; 2], flags: ScrollFlags) -> ChildScope {
         let ctx = &mut *self.ctx;
         let id = crate::widgets::widget_id(ctx, label);
         let style = ctx.style;
@@ -512,15 +1287,27 @@ impl Ui<'_> {
             }) => (*offset, *content_height),
             _ => (0.0, 0.0),
         };
-        let max_offset = (content_height - (rect[3] - rect[1])).max(0.0);
+        let inset = crate::scroll::content_inset(&style, rect);
+        let geometry = crate::scroll::geometry(&style, rect, inset, flags, content_height);
+        let content_rect = geometry.content_rect;
+        let scrollbar_rect = geometry.scrollbar_rect;
+        let max_offset = geometry.max_offset;
 
-        ctx.scroll_regions.push(ScrollRegionEntry {
-            id,
-            rect,
-            layer_owns_point: hover_layer_gate(ctx),
-            max_offset,
-        });
-        let offset = prev_offset.clamp(0.0, max_offset);
+        if flags.scrollable {
+            ctx.scroll_containers.push(ScrollContainerEntry {
+                id,
+                target: crate::scroll::ScrollTarget::Widget,
+                rect,
+                layer_owns_point: hover_layer_gate(ctx),
+                max_offset,
+                line_height: ctx.font.line_height_in(ctx.active_font()),
+            });
+        }
+        let offset = if flags.scrollable {
+            ctx.scroll_position(id, prev_offset.clamp(0.0, max_offset), max_offset)
+        } else {
+            0.0
+        };
         let mouse = ctx.input.mouse_pos;
 
         {
@@ -542,14 +1329,14 @@ impl Ui<'_> {
                     crate::widgets::lighten(style.widget_bg, crate::widgets::BORDER_LIGHTEN),
                 );
             }
-            draw_list.push_clip_rect(rect);
+            draw_list.push_clip_rect(content_rect);
         }
 
         ctx.id_stack.push_id(id);
         let saved_clip = ctx.interaction_clip;
         let clip = match saved_clip {
-            Some(outer) => crate::draw::intersect_rects(outer, rect),
-            None => rect,
+            Some(outer) => crate::draw::intersect_rects(outer, content_rect),
+            None => content_rect,
         };
         ctx.interaction_clip = Some(clip);
         let popup_scope = ctx.popup_scope_active;
@@ -558,8 +1345,8 @@ impl Ui<'_> {
         } else {
             ctx.current_window_mut().cursor
         };
-        let content_origin = [rect[0], rect[1] - offset];
-        let content_width = rect[2] - rect[0];
+        let content_origin = [content_rect[0], content_rect[1] - offset];
+        let content_width = content_rect[2] - content_rect[0];
         if popup_scope {
             ctx.overlay_cursor
                 .enter_region(content_origin, content_width);
@@ -572,19 +1359,23 @@ impl Ui<'_> {
         if !point_in_rect(mouse, clip) {
             ctx.prev_mouse_down[0] = true;
         }
-        ScrollRegionScope {
+        ChildScope {
             id,
             offset,
+            prev_offset,
             content_origin_y: content_origin[1],
             item_spacing_y: style.item_spacing[1],
             popup_scope,
             saved_cursor,
             saved_prev_left,
             saved_clip,
+            flags,
+            content_rect,
+            scrollbar_rect,
         }
     }
 
-    pub fn end_scroll_region(&mut self, scope: ScrollRegionScope) {
+    pub fn end_child(&mut self, scope: ChildScope) {
         let ctx = &mut *self.ctx;
         let end_y = if scope.popup_scope {
             ctx.overlay_cursor.pos_y()
@@ -601,14 +1392,56 @@ impl Ui<'_> {
         }
         ctx.prev_mouse_down[0] = scope.saved_prev_left;
         ctx.interaction_clip = scope.saved_clip;
+        let offset = match scope.scrollbar_rect {
+            Some(track) if scope.flags.scrollable && scope.flags.scrollbar => {
+                let bar_id = ctx.id_stack.id(crate::scroll::SCROLLBAR_TAG);
+                let visible_height = (scope.content_rect[3] - scope.content_rect[1]).max(0.0);
+                let offset = crate::scroll::scrollbar(
+                    ctx,
+                    bar_id,
+                    track,
+                    scope.offset,
+                    (content_height - visible_height).max(0.0),
+                    visible_height,
+                    content_height,
+                );
+                if offset != scope.offset
+                    || ctx.active == Some(bar_id)
+                    || (ctx.hot == Some(bar_id)
+                        && ctx.input.mouse_down[0]
+                        && !ctx.prev_mouse_down[0])
+                {
+                    ctx.scroll_snap(scope.id, offset);
+                }
+                offset
+            }
+            _ => scope.offset,
+        };
         ctx.id_stack.pop();
+        let persisted_offset = if scope.flags.scrollable {
+            offset
+        } else {
+            scope.prev_offset
+        };
         ctx.widget_states.insert(
             scope.id,
             WidgetState::Scroll {
-                offset: scope.offset,
+                offset: persisted_offset,
                 content_height,
             },
         );
+    }
+
+    pub fn scroll_region(&mut self, label: &str, size: [f32; 2], f: impl FnOnce(&mut Ui)) {
+        self.child(label, size, ScrollFlags::WHEEL, f)
+    }
+
+    pub fn begin_scroll_region(&mut self, label: &str, size: [f32; 2]) -> ScrollRegionScope {
+        self.begin_child(label, size, ScrollFlags::WHEEL)
+    }
+
+    pub fn end_scroll_region(&mut self, scope: ScrollRegionScope) {
+        self.end_child(scope)
     }
 
     pub fn combo(&mut self, label: &str, items: &[&str], selected: &mut usize) -> bool {
@@ -619,15 +1452,16 @@ impl Ui<'_> {
         let ctx = &mut *self.ctx;
         let display = split_label(label).0;
         let style = ctx.style;
-        let line_height = ctx.font.line_height();
+        let face = ctx.active_font();
+        let line_height = ctx.font.line_height_in(face);
         let arrow = line_height * 0.5;
         let row_h = line_height + 2.0 * style.frame_padding[1];
         let current = items.get(*selected).copied().unwrap_or("");
-        let current_size = ctx.font.measure(current);
+        let current_size = ctx.font.measure_in(face, current);
         let label_size = if display.is_empty() {
             [0.0; 2]
         } else {
-            ctx.font.measure(display)
+            ctx.font.measure_in(face, display)
         };
         let button_w = current_size[0] + arrow + 3.0 * style.frame_padding[0];
         let item_w = if display.is_empty() {
@@ -635,17 +1469,32 @@ impl Ui<'_> {
         } else {
             button_w + style.item_spacing[0] + label_size[0]
         };
-        let rect = crate::widgets::item_rect(ctx, [item_w, row_h]);
+        let rect = crate::widgets::interactive_rect(ctx, [item_w, row_h]);
         let button = [rect[0], rect[1], rect[0] + button_w, rect[3]];
-        crate::widgets::register_item(ctx, id, button);
+        if ctx.accessibility_enabled() && !items.is_empty() {
+            crate::widgets::register_focusable_item(ctx, id, button);
+        } else {
+            crate::widgets::register_item(ctx, id, button);
+        }
+        ctx.id_stack.semantics.describe(
+            id,
+            crate::accessibility::AccessibilityRole::ComboBox,
+            current,
+            if items.is_empty() {
+                crate::accessibility::AccessibilityState::DISABLED
+            } else {
+                0
+            },
+            if items.is_empty() { 0 } else { 3 },
+        );
 
         let mouse = ctx.input.mouse_pos;
         let left_down = ctx.input.mouse_down[0];
-        let mut clicked = false;
+        let mut clicked = !items.is_empty() && ctx.keyboard_activate == Some(id);
         let mut hover = false;
         let mut active_inside = false;
         if !items.is_empty() {
-            let inside = point_in_rect(mouse, button);
+            let inside = point_in_rect(mouse, ctx.target_rect(button));
             let left_pressed = left_down && !ctx.prev_mouse_down[0];
             if inside && left_pressed {
                 ctx.set_active(id);
@@ -671,6 +1520,7 @@ impl Ui<'_> {
         } else {
             style.widget_bg
         };
+        let bg = ctx.widget_color(id, bg);
         {
             let (font, draw_list) = crate::widgets::draw_parts(ctx);
             crate::widgets::chrome_fill(font, draw_list, style.corner_rounding, button, bg);
@@ -692,13 +1542,13 @@ impl Ui<'_> {
                 button[0] + style.frame_padding[0],
                 button[1] + (row_h - current_size[1]) / 2.0,
             ];
-            draw_list.add_text(font, text_pos, current, style.text);
+            draw_list.add_text(font, face, text_pos, current, style.text);
             if !display.is_empty() {
                 let label_pos = [
                     button[2] + style.item_spacing[0],
                     button[1] + (row_h - label_size[1]) / 2.0,
                 ];
-                draw_list.add_text(font, label_pos, display, style.text);
+                draw_list.add_text(font, face, label_pos, display, style.text);
             }
         }
         if clicked {
@@ -708,7 +1558,7 @@ impl Ui<'_> {
         let ctx = &mut *self.ctx;
         let mut widest = 0.0f32;
         for item in items {
-            widest = widest.max(ctx.font.measure(item)[0]);
+            widest = widest.max(ctx.font.measure_in(face, item)[0]);
         }
         let rows_height = |rows: usize| -> f32 {
             let mut h = 2.0 * style.window_padding[1];
@@ -745,8 +1595,9 @@ impl Ui<'_> {
             let content_w = crate::widgets::available_width(ui.ctx);
             let mut rows = |ui: &mut Ui| {
                 let ctx = &mut *ui.ctx;
+                let row_w = crate::widgets::available_width(ctx);
                 for (i, item) in items.iter().enumerate() {
-                    let row = crate::widgets::item_rect(ctx, [content_w, row_h]);
+                    let row = crate::widgets::item_rect(ctx, [row_w, row_h]);
                     ctx.id_stack.push_id(Id(i as u64));
                     let row_id = ctx.id_stack.id("##combo_item");
                     ctx.id_stack.pop();
@@ -779,7 +1630,7 @@ impl Ui<'_> {
                         None
                     };
 
-                    let text_size = ctx.font.measure(item);
+                    let text_size = ctx.font.measure_in(face, item);
                     let (font, draw_list) = crate::widgets::draw_parts(ctx);
                     if let Some(col) = bg {
                         draw_list.add_filled_rect([row[0], row[1]], [row[2], row[3]], col);
@@ -788,7 +1639,7 @@ impl Ui<'_> {
                         row[0] + style.frame_padding[0],
                         row[1] + (row_h - text_size[1]) / 2.0,
                     ];
-                    draw_list.add_text(font, text_pos, item, style.text);
+                    draw_list.add_text(font, face, text_pos, item, style.text);
                 }
             };
             if scrollable {
@@ -805,6 +1656,663 @@ impl Ui<'_> {
         false
     }
 
+    pub fn list_box(
+        &mut self,
+        label: &str,
+        items: &[&str],
+        selected: &mut usize,
+        size: [f32; 2],
+    ) -> bool {
+        self.list_box_with(
+            label,
+            items.len(),
+            |index| Some(items[index]),
+            selected,
+            size,
+        )
+        .unwrap_or(false)
+    }
+
+    pub fn list_box_with<'item>(
+        &mut self,
+        label: &str,
+        item_count: usize,
+        mut item_at: impl FnMut(usize) -> Option<&'item str>,
+        selected: &mut usize,
+        size: [f32; 2],
+    ) -> Option<bool> {
+        let id = crate::widgets::widget_id(self.ctx, label);
+        let display = split_label(label).0;
+        if !display.is_empty() {
+            self.label(display);
+        }
+        self.ctx.id_stack.push_id(id);
+        let scope = self.begin_child("##list_panel", size, ScrollFlags::BAR);
+        let panel_item = self.ctx.last_item;
+        let style = self.ctx.style;
+        let face = self.ctx.active_font();
+        let row_h = self.ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
+        let row_w = crate::widgets::available_width(self.ctx);
+        let clip = self.ctx.interaction_clip.unwrap_or(scope.content_rect);
+        let visible = crate::data::VisibleRows::in_rect(
+            item_count,
+            row_h,
+            style.item_spacing[1],
+            scope.content_origin_y,
+            clip,
+        )
+        .unwrap_or_default();
+        let (first, end) = (visible.start, visible.end);
+        for index in first..end {
+            if item_at(index).is_none() {
+                if scope.popup_scope {
+                    self.ctx
+                        .overlay_cursor
+                        .skip_rows(item_count, [row_w, row_h]);
+                } else {
+                    self.ctx
+                        .current_window_mut()
+                        .cursor
+                        .skip_rows(item_count, [row_w, row_h]);
+                }
+                self.end_child(scope);
+                self.ctx.last_item = panel_item;
+                self.ctx.id_stack.pop();
+                return None;
+            }
+        }
+        let captured_index = self.ctx.active_list_index.filter(|&index| {
+            self.ctx.id_stack.push_id(Id(index as u64));
+            let row_id = self.ctx.id_stack.id("##list_row");
+            self.ctx.id_stack.pop();
+            self.ctx.active == Some(row_id)
+        });
+        let released = captured_index.is_some() && !self.ctx.input.mouse_down[0];
+        if scope.popup_scope {
+            self.ctx.overlay_cursor.skip_rows(first, [row_w, row_h]);
+        } else {
+            self.ctx
+                .current_window_mut()
+                .cursor
+                .skip_rows(first, [row_w, row_h]);
+        }
+        let mut picked = None;
+        let mut invalid_at = None;
+        for index in first..end {
+            let Some(item) = item_at(index) else {
+                invalid_at = Some(index);
+                break;
+            };
+            let ctx = &mut *self.ctx;
+            let row = crate::widgets::item_rect(ctx, [row_w, row_h]);
+            ctx.id_stack.push_id(Id(index as u64));
+            let row_id = ctx.id_stack.id("##list_row");
+            ctx.id_stack.pop();
+            crate::widgets::register_item(ctx, row_id, row);
+
+            let mouse = ctx.input.mouse_pos;
+            let inside = point_in_rect(mouse, row)
+                && ctx
+                    .interaction_clip
+                    .is_some_and(|clip| point_in_rect(mouse, clip));
+            let left_down = ctx.input.mouse_down[0];
+            if inside && left_down && !ctx.prev_mouse_down[0] {
+                ctx.set_active(row_id);
+                ctx.active_list_index = Some(index);
+            }
+            let held = ctx.active == Some(row_id);
+            if released && captured_index == Some(index) && inside && *selected != index {
+                picked = Some(index);
+            }
+            let hover = hovered(ctx, row);
+            if hover {
+                ctx.hot = Some(row_id);
+            }
+            let bg = if held && inside || *selected == index || picked == Some(index) {
+                Some(style.widget_bg_active)
+            } else if hover {
+                Some(style.widget_bg_hovered)
+            } else {
+                None
+            };
+            let text_size = ctx.font.measure_in(face, item);
+            let (font, draw_list) = crate::widgets::draw_parts(ctx);
+            if let Some(bg) = bg {
+                draw_list.add_filled_rect([row[0], row[1]], [row[2], row[3]], bg);
+            }
+            draw_list.add_text(
+                font,
+                face,
+                [
+                    row[0] + style.frame_padding[0],
+                    row[1] + (row_h - text_size[1]) * 0.5,
+                ],
+                item,
+                style.text,
+            );
+        }
+        if released {
+            self.ctx.clear_active();
+        }
+        let remaining = item_count - invalid_at.unwrap_or(end);
+        if scope.popup_scope {
+            self.ctx.overlay_cursor.skip_rows(remaining, [row_w, row_h]);
+        } else {
+            self.ctx
+                .current_window_mut()
+                .cursor
+                .skip_rows(remaining, [row_w, row_h]);
+        }
+        self.end_child(scope);
+        self.ctx.last_item = panel_item;
+        self.ctx.id_stack.pop();
+        if invalid_at.is_some() {
+            return None;
+        }
+        if let Some(index) = picked {
+            *selected = index;
+            Some(true)
+        } else {
+            Some(false)
+        }
+    }
+
+    pub fn multi_select_list_with<'item>(
+        &mut self,
+        label: &str,
+        item_count: usize,
+        mut item_at: impl FnMut(usize) -> Option<&'item str>,
+        selected: &mut crate::data::Selection,
+        size: [f32; 2],
+    ) -> Option<bool> {
+        if item_count != selected.len() {
+            return None;
+        }
+        let id = crate::widgets::widget_id(self.ctx, label);
+        let display = split_label(label).0;
+        if !display.is_empty() {
+            self.label(display);
+        }
+        self.ctx.id_stack.push_id(id);
+        let scope = self.begin_child("##list_panel", size, ScrollFlags::BAR);
+        let panel_item = self.ctx.last_item;
+        let style = self.ctx.style;
+        let face = self.ctx.active_font();
+        let row_h = self.ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
+        let row_w = crate::widgets::available_width(self.ctx);
+        let clip = self.ctx.interaction_clip.unwrap_or(scope.content_rect);
+        let visible = crate::data::VisibleRows::in_rect(
+            item_count,
+            row_h,
+            style.item_spacing[1],
+            scope.content_origin_y,
+            clip,
+        )
+        .unwrap_or_default();
+        let (first, end) = (visible.start, visible.end);
+        for index in first..end {
+            if item_at(index).is_none() {
+                if scope.popup_scope {
+                    self.ctx
+                        .overlay_cursor
+                        .skip_rows(item_count, [row_w, row_h]);
+                } else {
+                    self.ctx
+                        .current_window_mut()
+                        .cursor
+                        .skip_rows(item_count, [row_w, row_h]);
+                }
+                self.end_child(scope);
+                self.ctx.last_item = panel_item;
+                self.ctx.id_stack.pop();
+                return None;
+            }
+        }
+        let captured_index = self.ctx.active_list_index.filter(|&index| {
+            self.ctx.id_stack.push_id(Id(index as u64));
+            let row_id = self.ctx.id_stack.id("##list_row");
+            self.ctx.id_stack.pop();
+            self.ctx.active == Some(row_id)
+        });
+        let released = captured_index.is_some() && !self.ctx.input.mouse_down[0];
+        if scope.popup_scope {
+            self.ctx.overlay_cursor.skip_rows(first, [row_w, row_h]);
+        } else {
+            self.ctx
+                .current_window_mut()
+                .cursor
+                .skip_rows(first, [row_w, row_h]);
+        }
+        let mut picked = None;
+        let mut invalid_at = None;
+        for index in first..end {
+            let Some(item) = item_at(index) else {
+                invalid_at = Some(index);
+                break;
+            };
+            let ctx = &mut *self.ctx;
+            let row = crate::widgets::item_rect(ctx, [row_w, row_h]);
+            ctx.id_stack.push_id(Id(index as u64));
+            let row_id = ctx.id_stack.id("##list_row");
+            ctx.id_stack.pop();
+            crate::widgets::register_item(ctx, row_id, row);
+
+            let mouse = ctx.input.mouse_pos;
+            let inside = point_in_rect(mouse, row)
+                && ctx
+                    .interaction_clip
+                    .is_some_and(|clip| point_in_rect(mouse, clip));
+            let left_down = ctx.input.mouse_down[0];
+            if inside
+                && hover_layer_gate(ctx)
+                && ctx.disabled_depth == 0
+                && left_down
+                && !ctx.prev_mouse_down[0]
+            {
+                ctx.set_active(row_id);
+                ctx.active_list_index = Some(index);
+            }
+            let held = ctx.active == Some(row_id);
+            if released
+                && captured_index == Some(index)
+                && inside
+                && ctx.disabled_depth == 0
+                && ctx.popup_input_allowed()
+            {
+                picked = Some(index);
+            }
+            let hover = hovered(ctx, row);
+            if hover {
+                ctx.hot = Some(row_id);
+            }
+            let bg = if held && inside || selected.is_selected(index) || picked == Some(index) {
+                Some(style.widget_bg_active)
+            } else if hover {
+                Some(style.widget_bg_hovered)
+            } else {
+                None
+            };
+            let text_size = ctx.font.measure_in(face, item);
+            let (font, draw_list) = crate::widgets::draw_parts(ctx);
+            if let Some(bg) = bg {
+                draw_list.add_filled_rect([row[0], row[1]], [row[2], row[3]], bg);
+            }
+            draw_list.add_text(
+                font,
+                face,
+                [
+                    row[0] + style.frame_padding[0],
+                    row[1] + (row_h - text_size[1]) * 0.5,
+                ],
+                item,
+                style.text,
+            );
+        }
+        if released {
+            self.ctx.clear_active();
+        }
+        let remaining = item_count - invalid_at.unwrap_or(end);
+        if scope.popup_scope {
+            self.ctx.overlay_cursor.skip_rows(remaining, [row_w, row_h]);
+        } else {
+            self.ctx
+                .current_window_mut()
+                .cursor
+                .skip_rows(remaining, [row_w, row_h]);
+        }
+        self.end_child(scope);
+        self.ctx.last_item = panel_item;
+        self.ctx.id_stack.pop();
+        if invalid_at.is_some() {
+            return None;
+        }
+        if let Some(index) = picked {
+            Some(selected.select(index, self.ctx.modifiers.ctrl, self.ctx.modifiers.shift))
+        } else {
+            Some(false)
+        }
+    }
+
+    pub fn searchable_combo(
+        &mut self,
+        label: &str,
+        items: &[&str],
+        selected: &mut usize,
+        query: &mut alloc::string::String,
+    ) -> bool {
+        self.searchable_combo_with(
+            label,
+            items.len(),
+            |index| Some(items[index]),
+            selected,
+            query,
+        )
+        .unwrap_or(false)
+    }
+
+    pub fn searchable_combo_with<'item>(
+        &mut self,
+        label: &str,
+        item_count: usize,
+        mut item_at: impl FnMut(usize) -> Option<&'item str>,
+        selected: &mut usize,
+        query: &mut alloc::string::String,
+    ) -> Option<bool> {
+        let id = crate::widgets::widget_id(self.ctx, label);
+        self.ctx.id_stack.push_id(id);
+        let search_id = self.ctx.id_stack.id("##search");
+        self.ctx.id_stack.pop();
+        if item_count == 0 && self.is_popup_open(id) {
+            self.close_popup();
+        }
+        if !self.is_popup_open(id) && self.ctx.active == Some(search_id) {
+            self.ctx.clear_active();
+        }
+
+        let ctx = &mut *self.ctx;
+        let display = split_label(label).0;
+        let style = ctx.style;
+        let face = ctx.active_font();
+        let line_h = ctx.font.line_height_in(face);
+        let row_h = line_h + 2.0 * style.frame_padding[1];
+        let arrow = line_h * 0.5;
+        let current = if *selected < item_count {
+            item_at(*selected)?
+        } else {
+            ""
+        };
+        let current_size = ctx.font.measure_in(face, current);
+        let label_size = ctx.font.measure_in(face, display);
+        let available = crate::widgets::available_width(ctx).max(0.0);
+        let button_w = (current_size[0] + arrow + 3.0 * style.frame_padding[0])
+            .max(160.0)
+            .min(available);
+        let item_w = if display.is_empty() {
+            button_w
+        } else {
+            button_w + style.item_spacing[0] + label_size[0]
+        };
+        let rect = crate::widgets::item_rect(ctx, [item_w, row_h]);
+        let button = [rect[0], rect[1], rect[0] + button_w, rect[3]];
+        crate::widgets::register_item(ctx, id, button);
+
+        let inside = point_in_rect(ctx.input.mouse_pos, button);
+        let left_down = ctx.input.mouse_down[0];
+        let left_pressed = left_down && !ctx.prev_mouse_down[0];
+        let mut clicked = false;
+        if item_count > 0 && inside && left_pressed {
+            ctx.set_active(id);
+        }
+        let held = ctx.active == Some(id);
+        if held && !left_down {
+            clicked = inside;
+            ctx.clear_active();
+        }
+        let hover = item_count > 0 && hovered(ctx, button);
+        if hover {
+            ctx.hot = Some(id);
+        }
+        let bg = if held && inside {
+            style.widget_bg_active
+        } else if hover {
+            style.widget_bg_hovered
+        } else {
+            style.widget_bg
+        };
+        let bg = ctx.widget_color(id, bg);
+        {
+            let (font, draw_list) = crate::widgets::draw_parts(ctx);
+            crate::widgets::chrome_fill(font, draw_list, style.corner_rounding, button, bg);
+            if style.border_size > 0.0 {
+                crate::widgets::draw_border(
+                    font,
+                    draw_list,
+                    style.corner_rounding,
+                    button,
+                    style.border_size,
+                    crate::widgets::lighten(bg, crate::widgets::BORDER_LIGHTEN),
+                );
+            }
+            let ax = button[2] - style.frame_padding[0] - arrow;
+            let ay = button[1] + (row_h - arrow) * 0.5;
+            draw_list.add_filled_polygon(
+                &[[ax, ay], [ax + arrow, ay], [ax + arrow * 0.5, ay + arrow]],
+                style.text,
+                style.anti_aliasing,
+            );
+            draw_list.add_text(
+                font,
+                face,
+                [
+                    button[0] + style.frame_padding[0],
+                    button[1] + (row_h - current_size[1]) * 0.5,
+                ],
+                current,
+                style.text,
+            );
+            if !display.is_empty() {
+                draw_list.add_text(
+                    font,
+                    face,
+                    [
+                        button[2] + style.item_spacing[0],
+                        button[1] + (row_h - label_size[1]) * 0.5,
+                    ],
+                    display,
+                    style.text,
+                );
+            }
+        }
+        let mut highlighted = match ctx.widget_states.get(&id) {
+            Some(WidgetState::SearchCombo { highlighted }) => *highlighted,
+            _ => 0,
+        };
+        if !clicked && !self.is_popup_open(id) {
+            return Some(false);
+        }
+
+        let mut widest = 0.0f32;
+        let mut matches = 0usize;
+        let effective_query = if clicked { "" } else { query.as_str() };
+        for index in 0..item_count {
+            let item = item_at(index)?;
+            widest = widest.max(self.ctx.font.measure_in(face, item)[0]);
+            if search_matches(item, effective_query) {
+                matches += 1;
+            }
+        }
+        if clicked {
+            query.clear();
+            highlighted = 0;
+            self.open_popup(id);
+            self.ctx.set_active(search_id);
+        }
+
+        let ctx = &mut *self.ctx;
+        let visible_rows = matches.clamp(1, 8);
+        let search_h = row_h;
+        let rows_h = visible_rows as f32 * row_h
+            + visible_rows.saturating_sub(1) as f32 * style.item_spacing[1];
+        let natural_h = 2.0 * style.window_padding[1] + search_h + style.item_spacing[1] + rows_h;
+        let viewport = ctx.input.viewport_size;
+        let clamped = viewport != [0.0, 0.0];
+        let mut popup_w =
+            button_w.max(widest + 2.0 * style.frame_padding[0] + 2.0 * style.window_padding[0]);
+        let mut popup_h = natural_h;
+        if clamped {
+            popup_w = popup_w.min(viewport[0]);
+            popup_h = popup_h.min((viewport[1] - button[3]).max(0.0));
+        }
+        let mut origin = [button[0], button[3]];
+        if clamped {
+            origin[0] = origin[0].clamp(0.0, (viewport[0] - popup_w).max(0.0));
+            origin[1] = origin[1].clamp(0.0, (viewport[1] - popup_h).max(0.0));
+        }
+        let popup_rect = [
+            origin[0],
+            origin[1],
+            origin[0] + popup_w,
+            origin[1] + popup_h,
+        ];
+        let results_h =
+            (popup_h - 2.0 * style.window_padding[1] - search_h - style.item_spacing[1]).max(0.0);
+        let scrollable = matches > visible_rows || natural_h > popup_h;
+
+        let mut picked = None;
+        let mut invalid_item = false;
+        self.popup(id, popup_rect, |ui| {
+            let changed = ui.text_input("##search", query);
+            let match_count = (0..item_count)
+                .filter(|&index| match item_at(index) {
+                    Some(item) => search_matches(item, query),
+                    None => {
+                        invalid_item = true;
+                        false
+                    }
+                })
+                .count();
+            if invalid_item {
+                return;
+            }
+            if changed {
+                highlighted = 0;
+            }
+            highlighted = highlighted.min(match_count.saturating_sub(1));
+            let mut keyboard_moved = false;
+            for event in ui.ctx.input.keys.iter().copied() {
+                match event {
+                    KeyEvent::Press(Key::Down) if match_count > 0 => {
+                        highlighted = (highlighted + 1).min(match_count - 1);
+                        keyboard_moved = true;
+                    }
+                    KeyEvent::Press(Key::Up) => {
+                        highlighted = highlighted.saturating_sub(1);
+                        keyboard_moved = true;
+                    }
+                    KeyEvent::Press(Key::Enter) if match_count > 0 => {
+                        picked = (0..item_count)
+                            .filter(|&index| match item_at(index) {
+                                Some(item) => search_matches(item, query),
+                                None => {
+                                    invalid_item = true;
+                                    false
+                                }
+                            })
+                            .nth(highlighted);
+                    }
+                    _ => {}
+                }
+            }
+            let content_w = crate::widgets::available_width(ui.ctx);
+            if scrollable && keyboard_moved {
+                let scroll_id = ui.widget_id("##search_results");
+                if let Some(WidgetState::Scroll { offset, .. }) =
+                    ui.ctx.widget_states.get_mut(&scroll_id)
+                {
+                    let step = row_h + style.item_spacing[1];
+                    let top = highlighted as f32 * step;
+                    let bottom = top + row_h;
+                    let view_h = (results_h - 4.0).max(row_h);
+                    if top < *offset {
+                        *offset = top;
+                    } else if bottom > *offset + view_h {
+                        *offset = bottom - view_h;
+                    }
+                }
+            }
+            let mut rows = |ui: &mut Ui| {
+                let ctx = &mut *ui.ctx;
+                let row_w = crate::widgets::available_width(ctx);
+                let mut match_index = 0;
+                for index in 0..item_count {
+                    let Some(item) = item_at(index) else {
+                        invalid_item = true;
+                        break;
+                    };
+                    if !search_matches(item, query) {
+                        continue;
+                    }
+                    let row = crate::widgets::item_rect(ctx, [row_w, row_h]);
+                    ctx.id_stack.push_id(Id(index as u64));
+                    let row_id = ctx.id_stack.id("##search_result");
+                    ctx.id_stack.pop();
+                    let clip = ctx.interaction_clip;
+                    let visible = clip.is_none_or(|clip| row[3] > clip[1] && row[1] < clip[3]);
+                    let left_down = ctx.input.mouse_down[0];
+                    if !visible {
+                        if ctx.active == Some(row_id) && !left_down {
+                            ctx.clear_active();
+                        }
+                        match_index += 1;
+                        continue;
+                    }
+                    let inside = point_in_rect(ctx.input.mouse_pos, row)
+                        && clip.is_none_or(|clip| point_in_rect(ctx.input.mouse_pos, clip));
+                    if inside && left_down && !ctx.prev_mouse_down[0] {
+                        ctx.set_active(row_id);
+                    }
+                    let held = ctx.active == Some(row_id);
+                    if held && !left_down {
+                        if inside {
+                            picked = Some(index);
+                        }
+                        ctx.clear_active();
+                    }
+                    let hover = hovered(ctx, row);
+                    if hover {
+                        ctx.hot = Some(row_id);
+                    }
+                    let bg = if held && inside || match_index == highlighted {
+                        Some(style.widget_bg_active)
+                    } else if hover {
+                        Some(style.widget_bg_hovered)
+                    } else {
+                        None
+                    };
+                    let text_size = ctx.font.measure_in(face, item);
+                    let (font, draw_list) = crate::widgets::draw_parts(ctx);
+                    if let Some(bg) = bg {
+                        draw_list.add_filled_rect([row[0], row[1]], [row[2], row[3]], bg);
+                    }
+                    draw_list.add_text(
+                        font,
+                        face,
+                        [
+                            row[0] + style.frame_padding[0],
+                            row[1] + (row_h - text_size[1]) * 0.5,
+                        ],
+                        item,
+                        style.text,
+                    );
+                    match_index += 1;
+                }
+                if match_index == 0 {
+                    ui.label("No matches");
+                }
+            };
+            if scrollable {
+                ui.scroll_region("##search_results", [content_w, results_h], rows);
+            } else {
+                rows(ui);
+            }
+        });
+        if invalid_item {
+            return None;
+        }
+        self.ctx
+            .widget_states
+            .insert(id, WidgetState::SearchCombo { highlighted });
+        if let Some(index) = picked {
+            *selected = index;
+            self.close_popup();
+            if self.ctx.active == Some(search_id) {
+                self.ctx.clear_active();
+            }
+            return Some(true);
+        }
+        Some(false)
+    }
+
     pub fn color_edit_rgba(&mut self, label: &str, value: &mut [u8; 4]) -> bool {
         let (id, swatch, item_w, clicked) = self.color_swatch_button(label, value);
         if clicked {
@@ -813,7 +2321,7 @@ impl Ui<'_> {
 
         let ctx = &mut *self.ctx;
         let style = ctx.style;
-        let row_h = ctx.font.line_height() + 2.0 * style.frame_padding[1];
+        let row_h = ctx.font.line_height_in(ctx.active_font()) + 2.0 * style.frame_padding[1];
         let preview_h = COLOR_EDIT_PREVIEW_ROWS * row_h;
         let mut popup_w = item_w.max(COLOR_EDIT_POPUP_MIN_WIDTH);
         let mut popup_h =
@@ -858,11 +2366,12 @@ impl Ui<'_> {
         let id = crate::widgets::widget_id(ctx, label);
         let display = split_label(label).0;
         let style = ctx.style;
-        let row_h = ctx.font.line_height() + 2.0 * style.frame_padding[1];
+        let face = ctx.active_font();
+        let row_h = ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
         let label_size = if display.is_empty() {
             [0.0; 2]
         } else {
-            ctx.font.measure(display)
+            ctx.font.measure_in(face, display)
         };
         let item_w = if display.is_empty() {
             row_h
@@ -919,7 +2428,7 @@ impl Ui<'_> {
                     swatch[2] + style.item_spacing[0],
                     rect[1] + (row_h - label_size[1]) / 2.0,
                 ];
-                draw_list.add_text(font, label_pos, display, style.text);
+                draw_list.add_text(font, face, label_pos, display, style.text);
             }
         }
         (id, swatch, item_w, clicked)
@@ -944,7 +2453,8 @@ impl Ui<'_> {
 
         let ctx = &mut *self.ctx;
         let style = ctx.style;
-        let row_h = ctx.font.line_height() + 2.0 * style.frame_padding[1];
+        let face = ctx.active_font();
+        let row_h = ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
         let preview_h = COLOR_EDIT_PREVIEW_ROWS * row_h;
         let sv_h = color_picker_column_height(row_h, style.item_spacing[1]);
         let sv_w = COLOR_PICKER_SV_WIDTH_RATIO * sv_h;
@@ -1019,11 +2529,11 @@ impl Ui<'_> {
             let preview = crate::widgets::item_rect(ui.ctx, [COLOR_PICKER_COLUMN_WIDTH, preview_h]);
             let slider_top = preview[3] + style.item_spacing[1];
 
-            let h_w = ui.ctx.font.measure("H")[0];
-            let s_w = ui.ctx.font.measure("S")[0];
-            let b_w = ui.ctx.font.measure("B")[0];
-            let r_w = ui.ctx.font.measure("R")[0];
-            let g_w = ui.ctx.font.measure("G")[0];
+            let h_w = ui.ctx.font.measure_in(face, "H")[0];
+            let s_w = ui.ctx.font.measure_in(face, "S")[0];
+            let b_w = ui.ctx.font.measure_in(face, "B")[0];
+            let r_w = ui.ctx.font.measure_in(face, "R")[0];
+            let g_w = ui.ctx.font.measure_in(face, "G")[0];
             let gutter = h_w.max(s_w).max(b_w).max(r_w).max(g_w);
             let narrow_track_w = narrow_w - gutter - style.item_spacing[0];
             let right_x = column_x + narrow_w + style.item_spacing[0];
@@ -1281,8 +2791,8 @@ impl Ui<'_> {
         let id = crate::widgets::widget_id(ctx, label);
         let display = split_label(label).0;
         let style = ctx.style;
-        let row_h = ctx.font.line_height() + 2.0 * style.frame_padding[1];
-        // An armed keybind can outlive its own capture -- orphaned and still listening. Retaining state in a stateless framework, episode two.
+        let face = ctx.active_font();
+        let row_h = ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
         let armed = matches!(
             ctx.widget_states.get(&id),
             Some(WidgetState::Keybind { armed: true })
@@ -1296,11 +2806,11 @@ impl Ui<'_> {
         }
         .expect("keybind caption always fits 64 bytes");
         let shown = shown_buf.as_str();
-        let shown_size = ctx.font.measure(shown);
+        let shown_size = ctx.font.measure_in(face, shown);
         let label_size = if display.is_empty() {
             [0.0; 2]
         } else {
-            ctx.font.measure(display)
+            ctx.font.measure_in(face, display)
         };
         let button_w = shown_size[0] + 2.0 * style.frame_padding[0];
         let item_w = if display.is_empty() {
@@ -1323,6 +2833,8 @@ impl Ui<'_> {
                 left_down && !ctx.prev_mouse_down[0],
                 ctx.input.mouse_down[1] && !ctx.prev_mouse_down[1],
                 ctx.input.mouse_down[2] && !ctx.prev_mouse_down[2],
+                ctx.input.mouse_down[3] && !ctx.prev_mouse_down[3],
+                ctx.input.mouse_down[4] && !ctx.prev_mouse_down[4],
             ];
             enum Action {
                 Unarm,
@@ -1394,6 +2906,7 @@ impl Ui<'_> {
         } else {
             style.widget_bg
         };
+        let bg = ctx.widget_color(id, bg);
         {
             let (font, draw_list) = crate::widgets::draw_parts(ctx);
             crate::widgets::chrome_fill(font, draw_list, style.corner_rounding, button, bg);
@@ -1411,13 +2924,13 @@ impl Ui<'_> {
                 button[0] + style.frame_padding[0],
                 button[1] + (row_h - shown_size[1]) / 2.0,
             ];
-            draw_list.add_text(font, text_pos, shown, style.text);
+            draw_list.add_text(font, face, text_pos, shown, style.text);
             if !display.is_empty() {
                 let label_pos = [
                     button[2] + style.item_spacing[0],
                     button[1] + (row_h - label_size[1]) / 2.0,
                 ];
-                draw_list.add_text(font, label_pos, display, style.text);
+                draw_list.add_text(font, face, label_pos, display, style.text);
             }
         }
         changed
@@ -1452,16 +2965,22 @@ impl Ui<'_> {
             }
             _ => false,
         };
+        if !show && hover {
+            if let Some(WidgetState::Tooltip { hover_time }) = ctx.widget_states.get(&state_id) {
+                ctx.request_redraw_in((TOOLTIP_DELAY - *hover_time).max(0.001));
+            }
+        }
         if !show {
             return;
         }
 
         let style = ctx.style;
-        let line_height = ctx.font.line_height();
+        let face = ctx.active_font();
+        let line_height = ctx.font.line_height_in(face);
         let mut widest = 0.0f32;
         let mut lines = 0usize;
         for line in text.split('\n') {
-            widest = widest.max(ctx.font.measure(line)[0]);
+            widest = widest.max(ctx.font.measure_in(face, line)[0]);
             lines += 1;
         }
         let w = widest + 2.0 * style.window_padding[0];
@@ -1499,7 +3018,7 @@ impl Ui<'_> {
                 origin[0] + style.window_padding[0],
                 origin[1] + style.window_padding[1] + i as f32 * line_height,
             ];
-            overlay.add_text(font, pos, line, style.text);
+            overlay.add_text(font, face, pos, line, style.text);
         }
     }
 
@@ -1511,26 +3030,170 @@ impl Ui<'_> {
         }
     }
 
-    pub(crate) fn open_popup(&mut self, id: Id) {
-        self.ctx.open_popup = Some(id);
-        self.ctx.popup_rect = None;
+    pub fn open_popup(&mut self, id: Id) {
+        self.ctx.push_popup(id, false);
     }
 
-    pub(crate) fn close_popup(&mut self) {
-        self.ctx.open_popup = None;
-        self.ctx.popup_rect = None;
+    pub fn close_popup(&mut self) {
+        self.ctx.dismiss_popup();
     }
 
-    pub(crate) fn is_popup_open(&self, id: Id) -> bool {
-        self.ctx.open_popup == Some(id)
+    pub fn popup_depth(&self) -> usize {
+        self.ctx.popup_depth()
+    }
+    pub fn modal_depth(&self) -> usize {
+        self.ctx.modal_depth()
     }
 
-    pub(crate) fn popup(&mut self, id: Id, rect: [f32; 4], f: impl FnOnce(&mut Ui)) {
-        if self.ctx.open_popup != Some(id) {
-            return;
+    pub fn is_popup_open(&self, id: Id) -> bool {
+        self.ctx.routing.popups[..self.ctx.routing.count]
+            .iter()
+            .any(|p| p.id == Some(id))
+    }
+
+    pub fn open_modal(&mut self, id: Id) {
+        self.ctx.push_popup(id, true);
+    }
+
+    pub fn toast(&mut self, text: &str, seconds: f32) {
+        self.ctx.push_toast(text, seconds);
+    }
+
+    pub fn begin_context_menu(&mut self, id: Id, target: [f32; 4], size: [f32; 2]) -> bool {
+        if self.ctx.input.mouse_down[1]
+            && !self.ctx.prev_mouse_down[1]
+            && hovered(self.ctx, target)
+            && !self.ctx.popup_modal
+        {
+            let anchor = self.ctx.input.mouse_pos;
+            self.open_popup(id);
+            self.ctx.popup_anchor = anchor;
         }
+        let anchor = self.ctx.popup_anchor;
+        let viewport = self.ctx.input.viewport_size;
+        let width = size[0].max(0.0);
+        let height = size[1].max(0.0);
+        let x = if viewport[0] > 0.0 {
+            anchor[0].clamp(0.0, (viewport[0] - width).max(0.0))
+        } else {
+            anchor[0]
+        };
+        let y = if viewport[1] > 0.0 {
+            anchor[1].clamp(0.0, (viewport[1] - height).max(0.0))
+        } else {
+            anchor[1]
+        };
+        self.begin_popup(id, [x, y, x + width, y + height])
+    }
+
+    pub fn begin_modal(&mut self, id: Id, rect: [f32; 4]) -> bool {
+        if !self.ctx.routing.popups[..self.ctx.routing.count]
+            .iter()
+            .any(|p| p.id == Some(id) && p.modal)
+        {
+            return false;
+        }
+        self.begin_popup(id, rect)
+    }
+
+    pub fn popup(&mut self, id: Id, rect: [f32; 4], f: impl FnOnce(&mut Ui)) {
+        if self.begin_popup(id, rect) {
+            f(self);
+            self.end_popup();
+        }
+    }
+
+    pub fn modal(&mut self, id: Id, rect: [f32; 4], f: impl FnOnce(&mut Ui)) {
+        if self.begin_modal(id, rect) {
+            f(self);
+            self.end_popup();
+        }
+    }
+
+    pub fn context_menu(
+        &mut self,
+        id: Id,
+        target: [f32; 4],
+        size: [f32; 2],
+        f: impl FnOnce(&mut Ui),
+    ) {
+        if self.begin_context_menu(id, target, size) {
+            f(self);
+            self.end_popup();
+        }
+    }
+
+    pub fn begin_popup(&mut self, id: Id, rect: [f32; 4]) -> bool {
+        let Some(index) = self.ctx.routing.popups[..self.ctx.routing.count]
+            .iter()
+            .position(|p| p.id == Some(id))
+        else {
+            return false;
+        };
+        assert!(
+            rect.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.)
+                && rect[2] > rect[0]
+                && rect[3] > rect[1],
+            "invalid popup rectangle"
+        );
         let ctx = &mut *self.ctx;
-        ctx.popup_rect = Some(rect);
+        assert!(
+            ctx.routing.depth < crate::interaction::MAX_POPUPS,
+            "popup scope limit"
+        );
+        assert!(
+            !ctx.routing.scopes[..ctx.routing.depth]
+                .iter()
+                .any(|s| s.index == index),
+            "recursive popup declaration"
+        );
+        let depth = ctx.routing.depth;
+        let scope = &mut ctx.routing.scopes[depth];
+        scope.id = id;
+        scope.index = index;
+        scope.cursor = ctx.overlay_cursor;
+        scope.prev = ctx.prev_mouse_down;
+        scope.mouse = ctx.input.mouse_pos;
+        scope.down = ctx.input.mouse_down;
+        scope.wheel = ctx.input.mouse_wheel;
+        scope.clip = ctx.interaction_clip;
+        scope.keys.clear();
+        scope.keys.extend_from_slice(&ctx.input.keys);
+        core::mem::swap(&mut ctx.overlay, &mut ctx.routing.popups[index].draw);
+        core::mem::swap(
+            &mut ctx.popup_animation,
+            &mut ctx.routing.popups[index].motion,
+        );
+        ctx.routing.depth += 1;
+        ctx.popup_scope_active = true;
+        ctx.input.mouse_pos = ctx.routing.scopes[0].mouse;
+        ctx.input.mouse_down = ctx.routing.scopes[0].down;
+        ctx.input.mouse_wheel = ctx.routing.scopes[0].wheel;
+        ctx.input.keys.clear();
+        ctx.input
+            .keys
+            .extend_from_slice(&ctx.routing.scopes[0].keys);
+        ctx.prev_mouse_down = ctx.routing.scopes[0].prev;
+        if index + 1 < ctx.routing.count {
+            ctx.input.mouse_pos = [-f32::MAX; 2];
+            ctx.input.mouse_down = [false; 5];
+            ctx.input.mouse_wheel = 0.;
+            ctx.input.keys.clear();
+            ctx.prev_mouse_down = [true; 5];
+        } else if ctx.press_target == crate::context::PressTarget::Popup {
+            ctx.prev_mouse_down[0] = false;
+        }
+        ctx.routing.popups[index].rect = Some(rect);
+        ctx.routing.popups[index].seen = ctx.motion_frame;
+        ctx.sync_popup_top();
+        ctx.mark_popup_motion(id);
+        if ctx.routing.popups[index].modal
+            && ctx.input.viewport_size[0] > 0.
+            && ctx.input.viewport_size[1] > 0.
+        {
+            ctx.overlay
+                .add_filled_rect([0.; 2], ctx.input.viewport_size, [0, 0, 0, 150]);
+        }
         let style = ctx.style;
         crate::widgets::chrome_fill(
             &mut ctx.font,
@@ -1557,20 +3220,46 @@ impl Ui<'_> {
             style.item_spacing,
         );
         ctx.id_stack.push_id(id);
-        ctx.popup_scope_active = true;
-        let saved_prev_left = ctx.prev_mouse_down[0];
-        if ctx.press_target == crate::context::PressTarget::Popup {
-            ctx.prev_mouse_down[0] = false;
-        }
-        let saved_interaction_clip = ctx.interaction_clip;
         ctx.interaction_clip = None;
-        f(&mut Ui { ctx: &mut *ctx });
+        true
+    }
+
+    pub fn end_popup(&mut self) {
         let ctx = &mut *self.ctx;
-        ctx.interaction_clip = saved_interaction_clip;
-        ctx.prev_mouse_down[0] = saved_prev_left;
-        ctx.popup_scope_active = false;
-        ctx.id_stack.pop();
+        assert!(ctx.routing.depth > 0, "Ui::end_popup without a popup scope");
+        ctx.finish_popup_motion();
         ctx.overlay.pop_clip_rect();
+        ctx.id_stack.pop();
+        ctx.routing.depth -= 1;
+        let scope = &mut ctx.routing.scopes[ctx.routing.depth];
+        ctx.interaction_clip = scope.clip;
+        ctx.prev_mouse_down = scope.prev;
+        ctx.input.mouse_pos = scope.mouse;
+        ctx.input.mouse_down = scope.down;
+        ctx.input.mouse_wheel = scope.wheel;
+        ctx.input.keys.clear();
+        ctx.input.keys.extend_from_slice(&scope.keys);
+        ctx.overlay_cursor = scope.cursor;
+        core::mem::swap(&mut ctx.overlay, &mut ctx.routing.popups[scope.index].draw);
+        core::mem::swap(
+            &mut ctx.popup_animation,
+            &mut ctx.routing.popups[scope.index].motion,
+        );
+        ctx.popup_scope_active = ctx.routing.depth > 0;
+        if ctx.routing.depth == 0 {
+            for slot in &ctx.routing.popups[..ctx.routing.count] {
+                ctx.overlay.append_faded(&slot.draw, 1.0);
+            }
+        }
+        if let Some((id, modal, level)) = ctx.routing.pending_popup {
+            if !ctx.routing.scopes[..ctx.routing.depth]
+                .iter()
+                .any(|scope| scope.index == level)
+            {
+                ctx.routing.pending_popup = None;
+                ctx.push_popup(id, modal);
+            }
+        }
     }
 
     pub fn draw_line(&mut self, p0: [f32; 2], p1: [f32; 2], col: [u8; 4], thickness: f32) {
@@ -1578,7 +3267,7 @@ impl Ui<'_> {
             return;
         }
         let aa = self.ctx.style.anti_aliasing;
-        routed_draw_list(self.ctx).add_thick_line(p0, p1, col, thickness, aa);
+        routed_draw_list(self.ctx).add_thick_line_with_caps(p0, p1, col, thickness, aa);
     }
 
     pub fn draw_rect_filled(&mut self, min: [f32; 2], max: [f32; 2], col: [u8; 4]) {
@@ -1631,8 +3320,8 @@ impl Ui<'_> {
         let Some(mask) = font.shape_mask(key) else {
             return false;
         };
-        let w = mask.rect[2] as f32;
-        let h = mask.rect[3] as f32;
+        let w = mask.rect[2] as f32 / mask.raster_scale;
+        let h = mask.rect[3] as f32 / mask.raster_scale;
         let min = [center[0] - w / 2.0, center[1] - h / 2.0];
         let max = [center[0] + w / 2.0, center[1] + h / 2.0];
         draw_list.add_textured_quad(TextureId::FONT, min, max, mask.uv_min, mask.uv_max, col);
@@ -1722,6 +3411,14 @@ impl Ui<'_> {
         crate::widgets::item_rect(self.ctx, size)
     }
 
+    pub fn available_width(&mut self) -> f32 {
+        self.ctx
+            .current_window_mut()
+            .cursor
+            .available_width()
+            .max(0.0)
+    }
+
     pub fn is_hovered(&self, rect: [f32; 4]) -> bool {
         hovered(self.ctx, rect)
     }
@@ -1740,16 +3437,40 @@ impl Ui<'_> {
         self.ctx.active == Some(id)
     }
 
+    pub fn focusable(&mut self, id: Id, rect: [f32; 4]) {
+        if rect.iter().all(|v| v.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1] {
+            crate::widgets::register_focusable_item(self.ctx, id, rect);
+        }
+    }
+
+    pub fn is_focused(&self, id: Id) -> bool {
+        self.ctx.focused == Some(id)
+    }
+
+    pub fn focus(&mut self, id: Id) {
+        if self.ctx.popup_input_allowed() {
+            self.ctx.focused = Some(id);
+            self.ctx.focused_in_modal = self.ctx.popup_modal;
+            self.ctx.focused_in_popup = self.ctx.popup_scope_active;
+        }
+    }
+
+    pub fn keyboard_activated(&self, id: Id) -> bool {
+        self.ctx.keyboard_activate == Some(id) && self.ctx.popup_input_allowed()
+    }
+
     pub fn draw_text_at(&mut self, pos: [f32; 2], text: &str, col: [u8; 4]) {
         if self.ctx.current_window.is_none() {
             return;
         }
+        let face = self.ctx.active_font();
         let (font, draw_list) = crate::widgets::draw_parts(self.ctx);
-        draw_list.add_text(font, pos, text, col);
+        draw_list.add_text(font, face, pos, text, col);
     }
 
     pub fn measure_text(&mut self, text: &str) -> [f32; 2] {
-        self.ctx.font.measure(text)
+        let face = self.ctx.active_font();
+        self.ctx.font.measure_in(face, text)
     }
 
     pub fn mouse_pos(&self) -> [f32; 2] {
@@ -1770,22 +3491,43 @@ impl Ui<'_> {
 }
 
 pub struct CollapsingHeaderScope {
+    motion: Option<crate::animation::CollapseMotion>,
     id: Id,
     open: bool,
     clicked: bool,
     indent: f32,
 }
 
-pub struct ScrollRegionScope {
+pub struct TreeNodeScope {
+    motion: Option<crate::animation::CollapseMotion>,
+    id: Id,
+    open: bool,
+    clicked: bool,
+    indent: f32,
+}
+
+pub struct ChildScope {
     id: Id,
     offset: f32,
+    prev_offset: f32,
     content_origin_y: f32,
     item_spacing_y: f32,
     popup_scope: bool,
     saved_cursor: Cursor,
     saved_prev_left: bool,
     saved_clip: Option<[f32; 4]>,
+    flags: ScrollFlags,
+    pub(crate) content_rect: [f32; 4],
+    scrollbar_rect: Option<[f32; 4]>,
 }
+
+impl ChildScope {
+    pub(crate) fn scroll_offset(&self) -> f32 {
+        self.offset
+    }
+}
+
+pub type ScrollRegionScope = ChildScope;
 
 pub struct TabBar<'a> {
     ctx: &'a mut Context,
@@ -1814,7 +3556,8 @@ fn tab_header(ctx: &mut Context, title: &str) -> bool {
     let id = ctx.id_stack.id(title);
     let display = split_label(title).0;
     let style = ctx.style;
-    let text_size = ctx.font.measure(display);
+    let face = ctx.active_font();
+    let text_size = ctx.font.measure_in(face, display);
     let width = text_size[0] + 2.0 * style.frame_padding[0];
     let rect = [pen_x, row[1], pen_x + width, row[3]];
     let top = ctx.tab_bar_scopes.len() - 1;
@@ -1822,7 +3565,7 @@ fn tab_header(ctx: &mut Context, title: &str) -> bool {
     crate::widgets::register_item(ctx, id, rect);
 
     let mouse = ctx.input.mouse_pos;
-    let inside = point_in_rect(mouse, rect);
+    let inside = point_in_rect(mouse, ctx.target_rect(rect));
     let left_down = ctx.input.mouse_down[0];
     let left_pressed = left_down && !ctx.prev_mouse_down[0];
     if inside && left_pressed {
@@ -1836,7 +3579,21 @@ fn tab_header(ctx: &mut Context, title: &str) -> bool {
         ctx.clear_active();
     }
 
+    if ctx.keyboard_activate == Some(id) {
+        ctx.tab_bar_scopes[top].clicked = Some(index);
+    }
     let is_active = index == bar_active;
+    ctx.id_stack.semantics.describe(
+        id,
+        crate::accessibility::AccessibilityRole::Tab,
+        display,
+        if is_active {
+            crate::accessibility::AccessibilityState::SELECTED
+        } else {
+            0
+        },
+        2,
+    );
     let hovered = hovered(ctx, rect);
     if hovered {
         ctx.hot = Some(id);
@@ -1848,6 +3605,7 @@ fn tab_header(ctx: &mut Context, title: &str) -> bool {
     } else {
         style.widget_bg
     };
+    let bg = ctx.widget_color(id, bg);
 
     {
         let (font, draw_list) = crate::widgets::draw_parts(ctx);
@@ -1882,9 +3640,21 @@ fn tab_header(ctx: &mut Context, title: &str) -> bool {
             rect[0] + (width - text_size[0]) / 2.0,
             rect[1] + (row[3] - row[1] - text_size[1]) / 2.0,
         ];
-        draw_list.add_text(font, text_pos, display, style.text);
+        draw_list.add_text(font, face, text_pos, display, style.text);
     }
     is_active
+}
+
+fn search_matches(item: &str, query: &str) -> bool {
+    query.is_empty()
+        || item.char_indices().any(|(start, _)| {
+            let mut remaining = item[start..].chars();
+            query.chars().all(|needle| {
+                remaining
+                    .next()
+                    .is_some_and(|hay| hay.eq_ignore_ascii_case(&needle))
+            })
+        })
 }
 
 fn normalize_rect(a: [f32; 2], b: [f32; 2]) -> Option<([f32; 2], [f32; 2])> {
@@ -1909,26 +3679,36 @@ fn routed_draw_list(ctx: &mut Context) -> &mut crate::draw::DrawList {
 }
 
 pub(crate) fn hovered(ctx: &Context, rect: [f32; 4]) -> bool {
-    if ctx.active.is_some() || !point_in_rect(ctx.input.mouse_pos, rect) {
+    if ctx.active.is_some() || !point_in_rect(ctx.input.mouse_pos, ctx.target_rect(rect)) {
         return false;
     }
     hover_layer_gate(ctx)
 }
 
-fn hover_layer_gate(ctx: &Context) -> bool {
+pub(crate) fn hover_layer_gate(ctx: &Context) -> bool {
+    if ctx.rounded_clips.iter().any(|clip| {
+        clip.popup == ctx.popup_scope_active
+            && clip.popup_id == ctx.routing.scope_id()
+            && clip.window == ctx.current_window
+            && !clip.shape.contains(ctx.input.mouse_pos)
+    }) {
+        return false;
+    }
     if let Some(clip) = ctx.interaction_clip {
         if !point_in_rect(ctx.input.mouse_pos, clip) {
             return false;
         }
     }
     if ctx.popup_scope_active {
-        return true;
+        return ctx.popup_input_allowed();
     }
-    if ctx.open_popup.is_some()
-        && ctx
-            .popup_rect
+    if ctx.popup_modal && ctx.open_popup.is_some() {
+        return false;
+    }
+    if ctx.routing.popups[..ctx.routing.count].iter().any(|slot| {
+        slot.rect
             .is_some_and(|rect| point_in_rect(ctx.input.mouse_pos, rect))
-    {
+    }) {
         return false;
     }
     match (ctx.current_window, ctx.hover_top_window) {
@@ -1937,7 +3717,7 @@ fn hover_layer_gate(ctx: &Context) -> bool {
     }
 }
 
-fn draw_checkerboard(draw_list: &mut crate::draw::DrawList, rect: [f32; 4]) {
+pub(crate) fn draw_checkerboard(draw_list: &mut crate::draw::DrawList, rect: [f32; 4]) {
     let mut row = 0u32;
     let mut y = rect[1];
     while y < rect[3] {
@@ -1964,6 +3744,7 @@ fn draw_checkerboard(draw_list: &mut crate::draw::DrawList, rect: [f32; 4]) {
 mod tests {
     use crate::context::Context;
     use crate::input::{InputState, Key, KeyEvent};
+    use crate::scroll::ScrollFlags;
     use alloc::vec::Vec;
 
     const DEJAVU_SANS: &[u8] = include_bytes!("../tests/assets/DejaVuSans.ttf");
@@ -1980,7 +3761,7 @@ mod tests {
 
         let mut closure_ran = false;
         let mut ui = ctx.ui();
-        ui.window("Test Window", |_ui| {
+        ui.window("Test Window", ScrollFlags::NONE, |_ui| {
             closure_ran = true;
         });
         let _ = ui;
@@ -2002,7 +3783,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Scoped", |_| {});
+            ui.window("Scoped", ScrollFlags::NONE, |_| {});
         }
         assert_eq!(
             ctx.id_stack.id("probe"),
@@ -2014,13 +3795,39 @@ mod tests {
     }
 
     #[test]
+    fn scrollable_window_closure_leaves_id_stack_and_both_clip_levels_balanced() {
+        let mut ctx = test_context();
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            ui.window("Scoped", ScrollFlags::WHEEL, |ui| {
+                ui.label("row");
+            });
+        }
+        assert_eq!(
+            ctx.id_stack.id("probe"),
+            crate::id::IdStack::new().id("probe")
+        );
+        const MARKER: [f32; 4] = [-7.0, -7.0, 7.0, 7.0];
+        let window = &mut ctx.windows[0];
+        window.draw_list.replace_base_clip(MARKER);
+        assert_eq!(
+            window.draw_list.current_clip(),
+            MARKER,
+            "end_window must pop the body content clip AND the window clip"
+        );
+        assert!(ctx.interaction_clip.is_none());
+        assert!(ctx.current_window.is_none());
+    }
+
+    #[test]
     fn two_windows_emit_disjoint_geometry_with_index_fixup() {
         let mut ctx = test_context();
         ctx.new_frame(0.016);
         let (rect_a, rect_b, verts_a, indices_a, verts_b, indices_b) = {
             let mut ui = ctx.ui();
-            ui.window("A", |_| {});
-            ui.window("B", |_| {});
+            ui.window("A", ScrollFlags::NONE, |_| {});
+            ui.window("B", ScrollFlags::NONE, |_| {});
             let _ = ui;
             let a = ctx.windows[0].draw_list.as_draw_data();
             let b = ctx.windows[1].draw_list.as_draw_data();
@@ -2062,8 +3869,8 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Open", |_| {});
-            ui.window("Closed", |_| {});
+            ui.window("Open", ScrollFlags::NONE, |_| {});
+            ui.window("Closed", ScrollFlags::NONE, |_| {});
         }
         ctx.windows[1].open = false;
         let rect = ctx.windows[0].rect();
@@ -2094,12 +3901,12 @@ mod tests {
         {
             let mut ui = ctx.ui();
             if use_begin_end {
-                assert!(ui.begin_window("Pair"));
+                assert!(ui.begin_window("Pair", ScrollFlags::NONE));
                 ui.label("hello");
                 let _ = ui.button("OK");
                 ui.end_window();
             } else {
-                ui.window("Pair", |ui| {
+                ui.window("Pair", ScrollFlags::NONE, |ui| {
                     ui.label("hello");
                     let _ = ui.button("OK");
                 });
@@ -2144,8 +3951,8 @@ mod tests {
         let mut ctx = test_context();
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        assert!(ui.begin_window("Outer"));
-        let _ = ui.begin_window("Inner");
+        assert!(ui.begin_window("Outer", ScrollFlags::NONE));
+        let _ = ui.begin_window("Inner", ScrollFlags::NONE);
     }
 
     #[test]
@@ -2154,7 +3961,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            assert!(ui.begin_window("Win"));
+            assert!(ui.begin_window("Win", ScrollFlags::NONE));
             ui.end_window();
         }
         ctx.render();
@@ -2163,7 +3970,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            assert!(!ui.begin_window("Win"));
+            assert!(!ui.begin_window("Win", ScrollFlags::NONE));
         }
         let data = ctx.render();
         assert!(data.vertices.is_empty());
@@ -2173,6 +3980,197 @@ mod tests {
             crate::id::IdStack::new().id("probe")
         );
         assert!(ctx.current_window.is_none());
+    }
+
+    fn two_face_context() -> (Context, crate::font::FontId) {
+        let mut ctx = test_context();
+        let big = ctx
+            .add_font(DEJAVU_SANS, 32.0)
+            .expect("a second face must register");
+        (ctx, big)
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown FontId")]
+    fn push_font_with_an_unknown_id_panics() {
+        let mut ctx = test_context();
+        ctx.new_frame(0.016);
+        let mut ui = ctx.ui();
+        ui.push_font(crate::font::FontId(7));
+    }
+
+    #[test]
+    #[should_panic(expected = "no font scope open")]
+    fn pop_font_without_a_matching_push_panics() {
+        let mut ctx = test_context();
+        ctx.new_frame(0.016);
+        let mut ui = ctx.ui();
+        ui.pop_font();
+    }
+
+    #[test]
+    #[should_panic(expected = "unbalanced font stack")]
+    fn render_with_an_unbalanced_font_stack_panics() {
+        let (mut ctx, big) = two_face_context();
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            ui.push_font(big);
+        }
+        let _ = ctx.render();
+    }
+
+    fn declare_font_scope_frame(
+        use_closure: bool,
+    ) -> (
+        Vec<crate::draw::DrawVert>,
+        Vec<u32>,
+        Vec<crate::draw::DrawCmd>,
+    ) {
+        let (mut ctx, big) = two_face_context();
+        ctx.set_input(InputState::default());
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            ui.window("Fonts", ScrollFlags::NONE, |ui| {
+                if use_closure {
+                    ui.with_font(big, |ui| {
+                        ui.label("hello");
+                        let _ = ui.button("OK");
+                    });
+                } else {
+                    ui.push_font(big);
+                    ui.label("hello");
+                    let _ = ui.button("OK");
+                    ui.pop_font();
+                }
+            });
+        }
+        assert!(ctx.font_stack.is_empty());
+        let data = ctx.render();
+        (
+            data.vertices.to_vec(),
+            data.indices.to_vec(),
+            data.commands.to_vec(),
+        )
+    }
+
+    #[test]
+    fn with_font_matches_the_push_pop_pair_byte_identically() {
+        let closure = declare_font_scope_frame(true);
+        let pair = declare_font_scope_frame(false);
+        assert_eq!(closure, pair);
+    }
+
+    #[test]
+    fn pushed_face_sizes_text_and_rows_by_its_own_rasterization() {
+        let (mut ctx, big) = two_face_context();
+        ctx.new_frame(0.016);
+        let mut default_advance = 0.0;
+        let mut big_advance = 0.0;
+        let mut default_size = [0.0; 2];
+        let mut big_size = [0.0; 2];
+        {
+            let mut ui = ctx.ui();
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                let before = ui.ctx.current_window_mut().cursor.next_pos();
+                ui.label("Hello");
+                default_advance = ui.ctx.current_window_mut().cursor.next_pos()[1] - before[1];
+                default_size = ui.measure_text("Hello");
+                ui.with_font(big, |ui| {
+                    let before = ui.ctx.current_window_mut().cursor.next_pos();
+                    ui.label("Hello");
+                    big_advance = ui.ctx.current_window_mut().cursor.next_pos()[1] - before[1];
+                    big_size = ui.measure_text("Hello");
+                });
+            });
+        }
+        ctx.render();
+        assert!(big_size[0] > default_size[0]);
+        assert!(big_size[1] > default_size[1]);
+        assert!(big_advance > default_advance);
+    }
+
+    #[test]
+    fn title_bar_height_follows_the_face_active_at_window_declaration() {
+        let (mut ctx, big) = two_face_context();
+        ctx.new_frame(0.016);
+        let mut default_bar = 0.0;
+        let mut big_bar = 0.0;
+        {
+            let mut ui = ctx.ui();
+            ui.window("A", ScrollFlags::NONE, |ui| {
+                let w = ui.ctx.current_window_mut();
+                default_bar = w.cursor.next_pos()[1] - w.pos[1];
+            });
+            ui.with_font(big, |ui| {
+                ui.window("B", ScrollFlags::NONE, |ui| {
+                    let w = ui.ctx.current_window_mut();
+                    big_bar = w.cursor.next_pos()[1] - w.pos[1];
+                });
+            });
+        }
+        ctx.render();
+        let style = ctx.style;
+        let extra = style.window_padding[1] + 2.0 * style.frame_padding[1];
+        assert_eq!(default_bar, ctx.font().line_height() + extra);
+        assert_eq!(big_bar, ctx.font().line_height_in(big) + extra);
+        assert!(big_bar > default_bar);
+    }
+
+    #[test]
+    fn wheel_scroll_step_follows_the_face_active_at_region_declaration() {
+        let (mut ctx, big) = two_face_context();
+        let mut region_center = [0.0; 2];
+        ctx.set_input(InputState::default());
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.with_font(big, |ui| {
+                    let pos = ui.ctx.current_window_mut().cursor.next_pos();
+                    region_center = [pos[0] + 100.0, pos[1] + 24.0];
+                    ui.scroll_region("Log", [200.0, 48.0], |ui| {
+                        for _ in 0..10 {
+                            ui.label("line");
+                        }
+                    });
+                });
+            });
+        }
+        ctx.render();
+        ctx.set_input(InputState {
+            mouse_pos: region_center,
+            mouse_wheel: -1.0,
+            ..Default::default()
+        });
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.with_font(big, |ui| {
+                    ui.scroll_region("Log", [200.0, 48.0], |ui| {
+                        for _ in 0..10 {
+                            ui.label("line");
+                        }
+                    });
+                });
+            });
+        }
+        ctx.render();
+        let mut stack = crate::id::IdStack::new();
+        stack.push("W");
+        let id = stack.id("Log");
+        let Some(crate::context::WidgetState::Scroll { offset, .. }) = ctx.widget_states.get(&id)
+        else {
+            panic!("the region must have scroll state");
+        };
+        let big_step = super::WHEEL_LINES_PER_NOTCH * ctx.font().line_height_in(big);
+        assert_eq!(*offset, big_step);
+        assert_ne!(
+            big_step,
+            super::WHEEL_LINES_PER_NOTCH * ctx.font().line_height()
+        );
     }
 
     use super::Ui;
@@ -2192,7 +4190,7 @@ mod tests {
     ) {
         ctx.set_input(InputState {
             mouse_pos: mouse,
-            mouse_down: [down, false, false],
+            mouse_down: [down, false, false, false, false],
             mouse_wheel: wheel,
             keys: &[],
             viewport_size: [0.0, 0.0],
@@ -2220,7 +4218,7 @@ mod tests {
     }
 
     fn declare_collapsing_closure(ui: &mut Ui) {
-        ui.window("W", |ui| {
+        ui.window("W", ScrollFlags::NONE, |ui| {
             ui.collapsing_header("Settings", |ui| {
                 ui.label("body");
                 let _ = ui.button("apply");
@@ -2229,7 +4227,7 @@ mod tests {
     }
 
     fn declare_collapsing_pair(ui: &mut Ui) {
-        assert!(ui.begin_window("W"));
+        assert!(ui.begin_window("W", ScrollFlags::NONE));
         if let Some(scope) = ui.begin_collapsing_header("Settings") {
             ui.label("body");
             let _ = ui.button("apply");
@@ -2268,7 +4266,7 @@ mod tests {
     fn collapsing_header_begin_reports_the_open_state() {
         let mut ctx = test_context();
         scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
-            ui.window("W", |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
                 assert!(ui.begin_collapsing_header("Settings").is_none());
             });
         });
@@ -2276,7 +4274,7 @@ mod tests {
         let origin = content_origin(&ctx);
         let at = [origin[0] + 5.0, origin[1] + header_h / 2.0];
         let declare = |ui: &mut Ui| {
-            ui.window("W", |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
                 if let Some(scope) = ui.begin_collapsing_header("Settings") {
                     ui.end_collapsing_header(scope);
                 }
@@ -2285,7 +4283,7 @@ mod tests {
         scripted_frame(&mut ctx, at, true, 0.0, |ui| declare(ui));
         scripted_frame(&mut ctx, at, false, 0.0, |ui| declare(ui));
         scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
-            ui.window("W", |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
                 let scope = ui
                     .begin_collapsing_header("Settings")
                     .expect("the header must be open after the click");
@@ -2295,7 +4293,7 @@ mod tests {
     }
 
     fn declare_scroll_closure(ui: &mut Ui) {
-        ui.window("W", |ui| {
+        ui.window("W", ScrollFlags::NONE, |ui| {
             ui.scroll_region("Log", [200.0, 96.0], |ui| {
                 for _ in 0..20 {
                     ui.label("log line");
@@ -2305,7 +4303,7 @@ mod tests {
     }
 
     fn declare_scroll_pair(ui: &mut Ui) {
-        assert!(ui.begin_window("W"));
+        assert!(ui.begin_window("W", ScrollFlags::NONE));
         let scope = ui.begin_scroll_region("Log", [200.0, 96.0]);
         for _ in 0..20 {
             ui.label("log line");
@@ -2341,8 +4339,1119 @@ mod tests {
         assert_eq!(closure, scroll_region_script(declare_scroll_pair));
     }
 
+    fn declare_scrollable_window_closure(ui: &mut Ui) {
+        ui.window("W", ScrollFlags::WHEEL, |ui| {
+            for _ in 0..60 {
+                ui.label("row");
+            }
+            let _ = ui.button("go");
+        });
+    }
+
+    fn declare_scrollable_window_pair(ui: &mut Ui) {
+        assert!(ui.begin_window("W", ScrollFlags::WHEEL));
+        for _ in 0..60 {
+            ui.label("row");
+        }
+        let _ = ui.button("go");
+        ui.end_window();
+    }
+
+    fn scrollable_window_script(
+        declare: impl Fn(&mut Ui),
+    ) -> Vec<(
+        Vec<crate::draw::DrawVert>,
+        Vec<u32>,
+        Vec<crate::draw::DrawCmd>,
+    )> {
+        let mut ctx = test_context();
+        let mut frames = Vec::new();
+        frames.push(scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| declare(ui)));
+        let origin = content_origin(&ctx);
+        let over = [origin[0] + 10.0, origin[1] + 10.0];
+        for _ in 0..3 {
+            frames.push(scripted_frame(&mut ctx, over, false, -1.0, |ui| {
+                declare(ui)
+            }));
+        }
+        frames
+    }
+
+    #[test]
+    fn scrollable_window_pair_matches_closure_form() {
+        let closure = scrollable_window_script(declare_scrollable_window_closure);
+        assert_ne!(closure[0], closure[2]);
+        assert_eq!(
+            closure,
+            scrollable_window_script(declare_scrollable_window_pair)
+        );
+    }
+
+    #[test]
+    fn scroll_region_draw_data_pin_matches_pre_refactor_snapshot() {
+        fn declare_pin_fixture(ui: &mut Ui) {
+            assert!(ui.begin_window("W", ScrollFlags::NONE));
+            let scope = ui.begin_scroll_region("Log", [80.0, 24.0]);
+            ui.label("x");
+            ui.label("y");
+            ui.label("z");
+            ui.end_scroll_region(scope);
+            ui.end_window();
+        }
+
+        let mut ctx = test_context();
+        let _settle = scripted_frame(&mut ctx, AWAY, false, 0.0, declare_pin_fixture);
+        let origin = content_origin(&ctx);
+        let over = [origin[0] + 5.0, origin[1] + 5.0];
+        let (verts, indices, cmds) =
+            scripted_frame(&mut ctx, over, false, -1.0, declare_pin_fixture);
+
+        assert_eq!(verts.len(), 175, "vertex count pin");
+        assert_eq!(indices.len(), 261, "index count pin");
+        assert_eq!(cmds.len(), 12, "command count pin");
+
+        use crate::draw::{DrawCmd, DrawVert, TextureId};
+        let expected_verts: Vec<DrawVert> = std::vec![
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E60000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x43E60000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x43E60000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E60000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E60000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E60000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [16, 16, 20, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42AD4000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42700000), f32::from_bits(0x42AD4000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [27, 27, 34, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x4285B400)],
+                uv: [f32::from_bits(0x3DC00000), f32::from_bits(0x3E800000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42AC0000), f32::from_bits(0x4285B400)],
+                uv: [f32::from_bits(0x3E200000), f32::from_bits(0x3E800000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42AC0000), f32::from_bits(0x429DB400)],
+                uv: [f32::from_bits(0x3E200000), f32::from_bits(0x3E980000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x429DB400)],
+                uv: [f32::from_bits(0x3DC00000), f32::from_bits(0x3E980000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x4282B505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42A3F505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x42A28AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42814AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x4282B505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42A3F505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B0D5D8), f32::from_bits(0x42A5E8A2)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A885D8), f32::from_bits(0x4284A8A2)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x42A28AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42814AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A9DA28), f32::from_bits(0x427EAEBC)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B22A28), f32::from_bits(0x42A0975E)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42A3F505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x4282B505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42814AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x42A28AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42A3F505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x4282B505)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B22A28), f32::from_bits(0x4284A8A2)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A9DA28), f32::from_bits(0x42A5E8A2)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42814AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x42A28AFB)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43A885D8), f32::from_bits(0x42A0975E)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B0D5D8), f32::from_bits(0x427EAEBC)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEB4000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEB4000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF34000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF34000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEB4000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEB4000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF34000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF34000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF4C000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF4C000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EECC000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EECC000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF4C000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF4C000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EECC000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EECC000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [41, 74, 122, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EEB4000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EEB4000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EF34000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EF34000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EEB4000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EEB4000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EF34000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EF34000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EF4C000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EF4C000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EECC000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EECC000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EF4C000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EF4C000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EECC000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EECC000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42C34000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42C34000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42EF4000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42EF4000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43120000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F14000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428E0000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428E0000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43150000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42C94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43160000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43150000), f32::from_bits(0x42E94000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [81, 114, 162, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x429057D8), f32::from_bits(0x42D14BD8)],
+                uv: [f32::from_bits(0x3EAE0000), f32::from_bits(0x3EC60000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42A257D8), f32::from_bits(0x42D14BD8)],
+                uv: [f32::from_bits(0x3EC00000), f32::from_bits(0x3EC60000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42A257D8), f32::from_bits(0x42E34BD8)],
+                uv: [f32::from_bits(0x3EC00000), f32::from_bits(0x3ED80000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x429057D8), f32::from_bits(0x42E34BD8)],
+                uv: [f32::from_bits(0x3EAE0000), f32::from_bits(0x3ED80000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x429057D8), f32::from_bits(0x42FE8BD8)],
+                uv: [f32::from_bits(0x3EC20000), f32::from_bits(0x3EC60000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42A257D8), f32::from_bits(0x42FE8BD8)],
+                uv: [f32::from_bits(0x3ED40000), f32::from_bits(0x3EC60000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42A257D8), f32::from_bits(0x430C45EC)],
+                uv: [f32::from_bits(0x3ED40000), f32::from_bits(0x3EE00000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x429057D8), f32::from_bits(0x430C45EC)],
+                uv: [f32::from_bits(0x3EC20000), f32::from_bits(0x3EE00000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x429057D8), f32::from_bits(0x4315E5EC)],
+                uv: [f32::from_bits(0x3ED60000), f32::from_bits(0x3EC60000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42A057D8), f32::from_bits(0x4315E5EC)],
+                uv: [f32::from_bits(0x3EE60000), f32::from_bits(0x3EC60000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x42A057D8), f32::from_bits(0x431EE5EC)],
+                uv: [f32::from_bits(0x3EE60000), f32::from_bits(0x3ED80000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x429057D8), f32::from_bits(0x431EE5EC)],
+                uv: [f32::from_bits(0x3ED60000), f32::from_bits(0x3ED80000)],
+                col: [240, 240, 240, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43DE0000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43E56A0A)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43AC0000), f32::from_bits(0x43E56A0A)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43E56A0A)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43DE0000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B3ADA3), f32::from_bits(0x43DD5CCE)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B3E6F1), f32::from_bits(0x43E5E6F1)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43AC0000), f32::from_bits(0x43E56A0A)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43E56A0A)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B3E6F1), f32::from_bits(0x43E5E6F1)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43AB5CCE), f32::from_bits(0x43E5ADA3)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43DE0000)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43AC0000), f32::from_bits(0x43E56A0A)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 255]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43AB5CCE), f32::from_bits(0x43E5ADA3)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+            DrawVert {
+                pos: [f32::from_bits(0x43B3ADA3), f32::from_bits(0x43DD5CCE)],
+                uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                col: [224, 224, 224, 0]
+            },
+        ];
+        let expected_indices: Vec<u32> = std::vec![
+            0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15, 16,
+            17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23, 24, 25, 26, 24, 26, 27, 28, 29, 30, 28, 30,
+            31, 32, 33, 34, 32, 34, 35, 36, 37, 38, 36, 38, 39, 40, 41, 42, 40, 42, 43, 44, 45, 46,
+            44, 46, 47, 48, 49, 50, 48, 50, 51, 52, 53, 54, 52, 54, 55, 56, 57, 58, 56, 58, 59, 60,
+            61, 62, 60, 62, 63, 64, 65, 66, 64, 66, 67, 68, 69, 70, 68, 70, 71, 72, 73, 74, 72, 74,
+            75, 76, 77, 78, 76, 78, 79, 80, 81, 82, 80, 82, 83, 84, 85, 86, 84, 86, 87, 88, 89, 90,
+            88, 90, 91, 92, 93, 94, 92, 94, 95, 96, 97, 98, 96, 98, 99, 100, 101, 102, 100, 102,
+            103, 104, 105, 106, 104, 106, 107, 108, 109, 110, 108, 110, 111, 112, 113, 114, 112,
+            114, 115, 116, 117, 118, 116, 118, 119, 120, 121, 122, 120, 122, 123, 124, 125, 126,
+            124, 126, 127, 128, 129, 130, 128, 130, 131, 132, 133, 134, 132, 134, 135, 136, 137,
+            138, 136, 138, 139, 140, 141, 142, 140, 142, 143, 144, 145, 146, 144, 146, 147, 148,
+            149, 150, 148, 150, 151, 152, 153, 154, 152, 154, 155, 156, 157, 158, 156, 158, 159,
+            160, 161, 162, 163, 164, 165, 163, 165, 166, 167, 168, 169, 167, 169, 170, 171, 172,
+            173, 171, 173, 174,
+        ];
+        let expected_cmds: Vec<DrawCmd> = std::vec![
+            DrawCmd {
+                effects: 0,
+                elem_count: 24,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(0)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 30,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(1)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 12,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(0)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 12,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(1)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 6,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(0)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 36,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(1)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 24,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(0)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 30,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(1)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 24,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(0)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 24,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(1)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 18,
+                clip_rect: [
+                    f32::from_bits(0x429057D8),
+                    f32::from_bits(0x42C597D8),
+                    f32::from_bits(0x4313D414),
+                    f32::from_bits(0x42ECE828)
+                ],
+                texture: TextureId(0)
+            },
+            DrawCmd {
+                effects: 0,
+                elem_count: 21,
+                clip_rect: [
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x42700000),
+                    f32::from_bits(0x43B40000),
+                    f32::from_bits(0x43E60000)
+                ],
+                texture: TextureId(1)
+            },
+        ];
+
+        assert_eq!(
+            verts, expected_verts,
+            "vertex data pin (full field comparison)"
+        );
+        assert_eq!(indices, expected_indices, "index data pin");
+        assert_eq!(
+            cmds, expected_cmds,
+            "command data pin (full field comparison)"
+        );
+    }
+
     fn declare_tabs_closure(ui: &mut Ui) {
-        ui.window("W", |ui| {
+        ui.window("W", ScrollFlags::NONE, |ui| {
             ui.tab_bar("Tabs", |tabs| {
                 tabs.tab("Alpha", |ui| {
                     ui.label("alpha body");
@@ -2355,7 +5464,7 @@ mod tests {
     }
 
     fn declare_tabs_pair(ui: &mut Ui) {
-        assert!(ui.begin_window("W"));
+        assert!(ui.begin_window("W", ScrollFlags::NONE));
         ui.begin_tab_bar("Tabs");
         if ui.tab("Alpha") {
             ui.label("alpha body");
@@ -2403,7 +5512,7 @@ mod tests {
     fn container_pairs_leave_scopes_balanced() {
         let mut ctx = test_context();
         let declare = |ui: &mut Ui| {
-            assert!(ui.begin_window("W"));
+            assert!(ui.begin_window("W", ScrollFlags::NONE));
             if let Some(header) = ui.begin_collapsing_header("Settings") {
                 let region = ui.begin_scroll_region("Log", [200.0, 96.0]);
                 ui.label("line");
@@ -2476,7 +5585,7 @@ mod tests {
     ) {
         ctx.set_input(InputState {
             mouse_pos,
-            mouse_down: [left_down, false, false],
+            mouse_down: [left_down, false, false, false, false],
             viewport_size,
             ..Default::default()
         });
@@ -2484,7 +5593,7 @@ mod tests {
         {
             let mut ui = ctx.ui();
             for &title in titles {
-                ui.window(title, |_| {});
+                ui.window(title, ScrollFlags::NONE, |_| {});
             }
         }
         ctx.render();
@@ -2631,7 +5740,7 @@ mod tests {
         let mut first_item = [0.0; 2];
         {
             let mut ui = ctx.ui();
-            ui.window("Probe", |ui| {
+            ui.window("Probe", ScrollFlags::NONE, |ui| {
                 first_item = ui.ctx.current_window_mut().cursor.next_pos();
             });
         }
@@ -2654,7 +5763,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Title Text", |_| {});
+            ui.window("Title Text", ScrollFlags::NONE, |_| {});
         }
         let bar = {
             let window = &ctx.windows[0];
@@ -2699,18 +5808,18 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("A", |_| {});
-            ui.window("B", |_| {});
+            ui.window("A", ScrollFlags::NONE, |_| {});
+            ui.window("B", ScrollFlags::NONE, |_| {});
         }
         ctx.render();
 
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("A", |ui| {
+            ui.window("A", ScrollFlags::NONE, |ui| {
                 ui.ctx.bring_window_to_front(0);
             });
-            ui.window("B", |_| {});
+            ui.window("B", ScrollFlags::NONE, |_| {});
         }
         assert_eq!(ctx.windows[1].title, "A");
         assert_eq!(ctx.windows[0].title, "B");
@@ -2720,10 +5829,9 @@ mod tests {
         ctx.render();
     }
 
-    fn last_quad_positions(ctx: &Context, n: usize) -> alloc::vec::Vec<[[f32; 2]; 4]> {
+    fn quads_from(ctx: &Context, start: usize, n: usize) -> alloc::vec::Vec<[[f32; 2]; 4]> {
         let data = ctx.windows[0].draw_list.as_draw_data();
-        let start = data.vertices.len() - 4 * n;
-        data.vertices[start..]
+        data.vertices[start..start + 4 * n]
             .chunks_exact(4)
             .map(|q| [q[0].pos, q[1].pos, q[2].pos, q[3].pos])
             .collect()
@@ -2751,13 +5859,21 @@ mod tests {
         let mut ctx = test_context();
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
+        let mut start = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
+                start = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
                 ui.draw_line([10.0, 20.0], [30.0, 20.0], [200, 0, 0, 255], 4.0);
             });
         }
-        let quads = last_quad_positions(&ctx, 1);
+        let quads = quads_from(&ctx, start, 1);
         let expected = [[10.0, 22.0], [30.0, 22.0], [30.0, 18.0], [10.0, 18.0]];
         for (a, e) in quads[0].iter().zip(expected.iter()) {
             assert_pos_near(*a, *e);
@@ -2765,7 +5881,7 @@ mod tests {
         let data = ctx.windows[0].draw_list.as_draw_data();
         let last_cmd = data.commands.last().expect("line must emit a command");
         assert_eq!(last_cmd.texture, crate::draw::TextureId::WHITE);
-        for v in &data.vertices[data.vertices.len() - 4..] {
+        for v in &data.vertices[start..start + 4] {
             assert_eq!(v.col, [200, 0, 0, 255]);
         }
         assert_all_commands_clipped_to_window(&ctx);
@@ -2777,9 +5893,17 @@ mod tests {
         let mut ctx = test_context();
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
+        let mut start = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
+                start = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
                 ui.draw_rect_filled([10.0, 10.0], [20.0, 30.0], [1, 2, 3, 255]);
                 ui.draw_rect_filled([20.0, 30.0], [10.0, 10.0], [1, 2, 3, 255]);
                 ui.ctx.current_window_mut().draw_list.add_filled_rect(
@@ -2789,7 +5913,7 @@ mod tests {
                 );
             });
         }
-        let quads = last_quad_positions(&ctx, 3);
+        let quads = quads_from(&ctx, start, 3);
         let expected = [[10.0, 10.0], [20.0, 10.0], [20.0, 30.0], [10.0, 30.0]];
         for quad in &quads {
             assert_eq!(quad, &expected);
@@ -2803,13 +5927,21 @@ mod tests {
         let mut ctx = test_context();
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
+        let mut start = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
+                start = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
                 ui.draw_rect_outline([10.0, 10.0], [30.0, 26.0], [0, 200, 0, 255], 2.0);
             });
         }
-        let quads = last_quad_positions(&ctx, 4);
+        let quads = quads_from(&ctx, start, 4);
         let expected = [
             [[10.0, 10.0], [30.0, 10.0], [30.0, 12.0], [10.0, 12.0]],
             [[10.0, 24.0], [30.0, 24.0], [30.0, 26.0], [10.0, 26.0]],
@@ -2828,7 +5960,7 @@ mod tests {
         let (before, after) = {
             let mut counts = (0usize, 0usize);
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 counts.0 = ui
                     .ctx
                     .current_window_mut()
@@ -2910,7 +6042,7 @@ mod tests {
         let mut after = [0.0; 2];
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 before = ui.ctx.current_window_mut().cursor.next_pos();
                 ui.draw_line([10.0, 20.0], [30.0, 20.0], [255, 0, 0, 255], 4.0);
                 ui.draw_rect_filled([10.0, 10.0], [20.0, 30.0], [255, 0, 0, 255]);
@@ -2937,8 +6069,8 @@ mod tests {
         ctx.render();
     }
 
-    fn positions_from(ctx: &Context, start: usize) -> alloc::vec::Vec<[f32; 2]> {
-        ctx.windows[0].draw_list.as_draw_data().vertices[start..]
+    fn positions_from(ctx: &Context, start: usize, count: usize) -> alloc::vec::Vec<[f32; 2]> {
+        ctx.windows[0].draw_list.as_draw_data().vertices[start..start + count]
             .iter()
             .map(|v| v.pos)
             .collect()
@@ -2950,9 +6082,10 @@ mod tests {
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
         let mut start = 0usize;
+        let mut vend = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 start = ui
                     .ctx
                     .current_window_mut()
@@ -2961,14 +6094,21 @@ mod tests {
                     .vertices
                     .len();
                 ui.draw_circle_filled([100.0, 100.0], 40.0, [0, 0, 200, 255]);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
             });
         }
         let n = crate::draw::circle_segment_count(40.0);
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - start, n + 1);
+        assert_eq!(vend - start, n + 1);
         assert_eq!(data.vertices[start].pos, [100.0, 100.0]);
         assert_pos_near(data.vertices[start + 1].pos, [140.0, 100.0]);
-        for v in &data.vertices[start..] {
+        for v in &data.vertices[start..vend] {
             assert_eq!(v.col, [0, 0, 200, 255]);
         }
         let last_cmd = data.commands.last().expect("circle must emit a command");
@@ -2994,9 +6134,10 @@ mod tests {
         ctx.style.anti_aliasing = true;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3012,6 +6153,20 @@ mod tests {
                     .indices
                     .len();
                 ui.draw_circle_filled([100.0, 80.0], 20.0, [9, 8, 7, 255]);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         let mask = ctx
@@ -3019,8 +6174,8 @@ mod tests {
             .shape_mask(crate::font::ShapeKey::disk(20.0))
             .expect("radius 20 fits the mask cap");
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - vstart, 4);
-        assert_eq!(data.indices.len() - istart, 6);
+        assert_eq!(vend - vstart, 4);
+        assert_eq!(iend - istart, 6);
         let w = mask_disk_dim(20.0);
         assert_eq!(w, 42.0, "radius 20: ceil(2·20) + 2");
         assert_eq!(mask.rect[2] as f32, w);
@@ -3033,27 +6188,27 @@ mod tests {
             [cx + h, cy + h],
             [cx - h, cy + h],
         ];
-        assert_eq!(positions_from(&ctx, vstart), expected);
+        assert_eq!(positions_from(&ctx, vstart, 4), expected);
         let expected_uvs = [
             mask.uv_min,
             [mask.uv_max[0], mask.uv_min[1]],
             mask.uv_max,
             [mask.uv_min[0], mask.uv_max[1]],
         ];
-        for (v, uv) in data.vertices[vstart..].iter().zip(expected_uvs.iter()) {
+        for (v, uv) in data.vertices[vstart..vend].iter().zip(expected_uvs.iter()) {
             assert_eq!(v.col, [9, 8, 7, 255]);
             assert_eq!(v.uv, *uv);
         }
         let base = vstart as u32;
         assert_eq!(
-            data.indices[istart..],
+            data.indices[istart..iend],
             [base, base + 1, base + 2, base, base + 2, base + 3]
         );
         let mut offset = 0usize;
         let mut circle_cmds = 0;
         for cmd in data.commands {
             let next = offset + cmd.elem_count as usize;
-            if next > istart {
+            if next > istart && offset < iend {
                 assert_eq!(cmd.texture, crate::draw::TextureId::FONT);
                 circle_cmds += 1;
             }
@@ -3070,9 +6225,10 @@ mod tests {
         ctx.style.anti_aliasing = true;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3088,21 +6244,35 @@ mod tests {
                     .indices
                     .len();
                 ui.draw_circle_filled([400.0, 300.0], 300.0, [9, 8, 7, 255]);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         let n = crate::draw::circle_segment_count(300.0);
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - vstart, (n + 1) + 4 * n);
-        assert_eq!(data.indices.len() - istart, 9 * n);
+        assert_eq!(vend - vstart, (n + 1) + 4 * n);
+        assert_eq!(iend - istart, 9 * n);
         let mut offset = 0usize;
         for cmd in data.commands {
             let next = offset + cmd.elem_count as usize;
-            if next > istart {
+            if next > istart && offset < iend {
                 assert_eq!(cmd.texture, crate::draw::TextureId::WHITE);
             }
             offset = next;
         }
-        let faded = data.vertices[vstart..]
+        let faded = data.vertices[vstart..vend]
             .iter()
             .filter(|v| v.col[3] == 0)
             .count();
@@ -3117,9 +6287,10 @@ mod tests {
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3135,16 +6306,34 @@ mod tests {
                     .indices
                     .len();
                 ui.draw_circle_filled([100.0, 100.0], 40.0, [0, 0, 200, 255]);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         let mut reference = crate::draw::DrawList::new();
         reference.add_filled_circle([100.0, 100.0], 40.0, [0, 0, 200, 255], false);
         let ref_data = reference.as_draw_data();
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(&data.vertices[vstart..], ref_data.vertices);
-        assert_eq!(data.indices.len() - istart, ref_data.indices.len());
+        assert_eq!(vend - vstart, ref_data.vertices.len());
+        assert_eq!(&data.vertices[vstart..vend], ref_data.vertices);
+        assert_eq!(iend - istart, ref_data.indices.len());
         let base = vstart as u32;
-        for (actual, expected) in data.indices[istart..].iter().zip(ref_data.indices.iter()) {
+        for (actual, expected) in data.indices[istart..iend]
+            .iter()
+            .zip(ref_data.indices.iter())
+        {
             assert_eq!(*actual, expected + base);
         }
         ctx.render();
@@ -3157,7 +6346,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_circle_filled([100.0, 80.0], 20.0, [9, 8, 7, 255]);
             });
         }
@@ -3166,9 +6355,10 @@ mod tests {
 
         ctx.new_frame(0.016);
         let mut vstart = 0usize;
+        let mut vend = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3178,6 +6368,13 @@ mod tests {
                     .len();
                 ui.draw_circle_filled([100.0, 80.0], 20.0, [9, 8, 7, 255]);
                 ui.draw_circle_filled([200.0, 120.0], 20.0, [9, 8, 7, 255]);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
             });
         }
         assert_eq!(
@@ -3185,8 +6382,7 @@ mod tests {
             gen_cached,
             "cache hits must not touch the atlas"
         );
-        let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - vstart, 8);
+        assert_eq!(vend - vstart, 8);
         let h = mask_disk_dim(20.0) / 2.0;
         let mut expected = alloc::vec::Vec::new();
         for (cx, cy) in [(100.0, 80.0), (200.0, 120.0)] {
@@ -3197,7 +6393,7 @@ mod tests {
                 [cx - h, cy + h],
             ]);
         }
-        assert_eq!(positions_from(&ctx, vstart), expected);
+        assert_eq!(positions_from(&ctx, vstart, 8), expected);
         ctx.render();
     }
 
@@ -3207,9 +6403,10 @@ mod tests {
         ctx.style.anti_aliasing = true;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3225,6 +6422,20 @@ mod tests {
                     .indices
                     .len();
                 ui.draw_circle_outline([100.0, 80.0], 20.0, [9, 8, 7, 255], 4.0);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         let mask = ctx
@@ -3232,8 +6443,8 @@ mod tests {
             .shape_mask(crate::font::ShapeKey::ring(20.0, 4.0))
             .expect("radius 20, thickness 4 fits the mask cap");
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - vstart, 4);
-        assert_eq!(data.indices.len() - istart, 6);
+        assert_eq!(vend - vstart, 4);
+        assert_eq!(iend - istart, 6);
         let w = mask_ring_dim(20.0, 4.0);
         assert_eq!(w, 46.0, "radius 20, thickness 4: ceil(2·20 + 4) + 2");
         assert_eq!(mask.rect[2] as f32, w);
@@ -3246,27 +6457,27 @@ mod tests {
             [cx + h, cy + h],
             [cx - h, cy + h],
         ];
-        assert_eq!(positions_from(&ctx, vstart), expected);
+        assert_eq!(positions_from(&ctx, vstart, 4), expected);
         let expected_uvs = [
             mask.uv_min,
             [mask.uv_max[0], mask.uv_min[1]],
             mask.uv_max,
             [mask.uv_min[0], mask.uv_max[1]],
         ];
-        for (v, uv) in data.vertices[vstart..].iter().zip(expected_uvs.iter()) {
+        for (v, uv) in data.vertices[vstart..vend].iter().zip(expected_uvs.iter()) {
             assert_eq!(v.col, [9, 8, 7, 255]);
             assert_eq!(v.uv, *uv);
         }
         let base = vstart as u32;
         assert_eq!(
-            data.indices[istart..],
+            data.indices[istart..iend],
             [base, base + 1, base + 2, base, base + 2, base + 3]
         );
         let mut offset = 0usize;
         let mut outline_cmds = 0;
         for cmd in data.commands {
             let next = offset + cmd.elem_count as usize;
-            if next > istart {
+            if next > istart && offset < iend {
                 assert_eq!(cmd.texture, crate::draw::TextureId::FONT);
                 outline_cmds += 1;
             }
@@ -3283,9 +6494,10 @@ mod tests {
         ctx.style.anti_aliasing = true;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3301,27 +6513,45 @@ mod tests {
                     .indices
                     .len();
                 ui.draw_circle_outline([400.0, 300.0], 300.0, [9, 8, 7, 255], 10.0);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         let mut reference = crate::draw::DrawList::new();
         reference.add_circle_outline([400.0, 300.0], 300.0, [9, 8, 7, 255], 10.0, true);
         let ref_data = reference.as_draw_data();
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(&data.vertices[vstart..], ref_data.vertices);
-        assert_eq!(data.indices.len() - istart, ref_data.indices.len());
+        assert_eq!(vend - vstart, ref_data.vertices.len());
+        assert_eq!(&data.vertices[vstart..vend], ref_data.vertices);
+        assert_eq!(iend - istart, ref_data.indices.len());
         let base = vstart as u32;
-        for (actual, expected) in data.indices[istart..].iter().zip(ref_data.indices.iter()) {
+        for (actual, expected) in data.indices[istart..iend]
+            .iter()
+            .zip(ref_data.indices.iter())
+        {
             assert_eq!(*actual, expected + base);
         }
         let mut offset = 0usize;
         for cmd in data.commands {
             let next = offset + cmd.elem_count as usize;
-            if next > istart {
+            if next > istart && offset < iend {
                 assert_eq!(cmd.texture, crate::draw::TextureId::WHITE);
             }
             offset = next;
         }
-        assert!(data.vertices[vstart..].iter().any(|v| v.col[3] == 0));
+        assert!(data.vertices[vstart..vend].iter().any(|v| v.col[3] == 0));
         assert_all_commands_clipped_to_window(&ctx);
         ctx.render();
     }
@@ -3332,9 +6562,10 @@ mod tests {
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3350,16 +6581,34 @@ mod tests {
                     .indices
                     .len();
                 ui.draw_circle_outline([100.0, 100.0], 40.0, [0, 0, 200, 255], 3.0);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         let mut reference = crate::draw::DrawList::new();
         reference.add_circle_outline([100.0, 100.0], 40.0, [0, 0, 200, 255], 3.0, false);
         let ref_data = reference.as_draw_data();
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(&data.vertices[vstart..], ref_data.vertices);
-        assert_eq!(data.indices.len() - istart, ref_data.indices.len());
+        assert_eq!(vend - vstart, ref_data.vertices.len());
+        assert_eq!(&data.vertices[vstart..vend], ref_data.vertices);
+        assert_eq!(iend - istart, ref_data.indices.len());
         let base = vstart as u32;
-        for (actual, expected) in data.indices[istart..].iter().zip(ref_data.indices.iter()) {
+        for (actual, expected) in data.indices[istart..iend]
+            .iter()
+            .zip(ref_data.indices.iter())
+        {
             assert_eq!(*actual, expected + base);
         }
         ctx.render();
@@ -3372,7 +6621,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_circle_outline([100.0, 80.0], 20.0, [9, 8, 7, 255], 4.0);
             });
         }
@@ -3381,9 +6630,10 @@ mod tests {
 
         ctx.new_frame(0.016);
         let mut vstart = 0usize;
+        let mut vend = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3393,6 +6643,13 @@ mod tests {
                     .len();
                 ui.draw_circle_outline([100.0, 80.0], 20.0, [9, 8, 7, 255], 4.0);
                 ui.draw_circle_outline([200.0, 120.0], 20.0, [9, 8, 7, 255], 4.0);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
             });
         }
         assert_eq!(
@@ -3400,14 +6657,13 @@ mod tests {
             gen_ring,
             "ring cache hits must not touch the atlas"
         );
-        let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - vstart, 8);
+        assert_eq!(vend - vstart, 8);
         ctx.render();
 
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_circle_filled([100.0, 80.0], 20.0, [9, 8, 7, 255]);
             });
         }
@@ -3424,10 +6680,11 @@ mod tests {
         ctx.style.anti_aliasing = true;
         ctx.new_frame(0.016);
         let (mut vstart, mut istart) = (0usize, 0usize);
+        let (mut vend, mut iend) = (0usize, 0usize);
         let (mut gen_before, mut gen_after) = (0u64, 0u64);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 vstart = ui
                     .ctx
                     .current_window_mut()
@@ -3451,6 +6708,20 @@ mod tests {
                     3.0,
                 );
                 gen_after = ui.ctx.font().atlas_generation();
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
+                iend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
             });
         }
         assert_eq!(gen_before, gen_after);
@@ -3466,16 +6737,20 @@ mod tests {
         );
         let ref_data = reference.as_draw_data();
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(&data.vertices[vstart..], ref_data.vertices);
-        assert_eq!(data.indices.len() - istart, ref_data.indices.len());
+        assert_eq!(vend - vstart, ref_data.vertices.len());
+        assert_eq!(&data.vertices[vstart..vend], ref_data.vertices);
+        assert_eq!(iend - istart, ref_data.indices.len());
         let base = vstart as u32;
-        for (actual, expected) in data.indices[istart..].iter().zip(ref_data.indices.iter()) {
+        for (actual, expected) in data.indices[istart..iend]
+            .iter()
+            .zip(ref_data.indices.iter())
+        {
             assert_eq!(*actual, expected + base);
         }
         let mut offset = 0usize;
         for cmd in data.commands {
             let next = offset + cmd.elem_count as usize;
-            if next > istart {
+            if next > istart && offset < iend {
                 assert_eq!(cmd.texture, crate::draw::TextureId::WHITE);
             }
             offset = next;
@@ -3492,7 +6767,7 @@ mod tests {
         let mut start = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 start = ui
                     .ctx
                     .current_window_mut()
@@ -3511,7 +6786,7 @@ mod tests {
             });
         }
         let n = crate::draw::circle_segment_count(40.0 + 1.5);
-        let positions = positions_from(&ctx, start);
+        let positions = positions_from(&ctx, start, 4 * n);
         assert_eq!(positions.len(), 4 * n);
         assert_eq!(&positions[..2 * n], &positions[2 * n..]);
         assert_pos_near(positions[0], [100.0 + 40.0 + 1.5, 100.0]);
@@ -3524,10 +6799,11 @@ mod tests {
         let mut ctx = test_context();
         ctx.new_frame(0.016);
         let mut start = 0usize;
+        let mut vend = 0usize;
         let quarter = core::f32::consts::FRAC_PI_2;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 start = ui
                     .ctx
                     .current_window_mut()
@@ -3537,9 +6813,16 @@ mod tests {
                     .len();
                 ui.draw_arc([100.0, 100.0], 40.0, 0.0..=quarter, [1, 1, 1, 255], 2.0);
                 ui.draw_arc([100.0, 100.0], 40.0, quarter..=0.0, [1, 1, 1, 255], 2.0);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
             });
         }
-        let positions = positions_from(&ctx, start);
+        let positions = positions_from(&ctx, start, vend - start);
         assert!(positions.len().is_multiple_of(2) && !positions.is_empty());
         let half = positions.len() / 2;
         assert_eq!(&positions[..half], &positions[half..]);
@@ -3553,10 +6836,12 @@ mod tests {
         ctx.style.anti_aliasing = false;
         ctx.new_frame(0.016);
         let mut start = 0usize;
+        let mut vend = 0usize;
+        let mut istart = 0usize;
         let points = [[10.0, 10.0], [30.0, 10.0], [40.0, 30.0], [20.0, 40.0]];
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 start = ui
                     .ctx
                     .current_window_mut()
@@ -3564,18 +6849,32 @@ mod tests {
                     .as_draw_data()
                     .vertices
                     .len();
+                istart = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .indices
+                    .len();
                 ui.draw_polygon_filled(&points, [1, 2, 3, 255]);
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
             });
         }
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - start, 4);
-        for (v, p) in data.vertices[start..].iter().zip(points.iter()) {
+        assert_eq!(vend - start, 4);
+        for (v, p) in data.vertices[start..vend].iter().zip(points.iter()) {
             assert_eq!(v.pos, *p);
             assert_eq!(v.col, [1, 2, 3, 255]);
         }
         let base = start as u32;
         assert_eq!(
-            data.indices[data.indices.len() - 6..],
+            data.indices[istart..istart + 6],
             [base, base + 1, base + 2, base, base + 2, base + 3]
         );
         let last_cmd = data.commands.last().expect("polygon must emit a command");
@@ -3590,9 +6889,10 @@ mod tests {
         let mut ctx = test_context();
         ctx.new_frame(0.016);
         let mut start = 0usize;
+        let mut vend = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 start = ui
                     .ctx
                     .current_window_mut()
@@ -3616,25 +6916,36 @@ mod tests {
                     [0.75, 1.0],
                     [9, 8, 7, 255],
                 );
+                vend = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
             });
         }
         let data = ctx.windows[0].draw_list.as_draw_data();
-        assert_eq!(data.vertices.len() - start, 8);
+        assert_eq!(vend - start, 8);
         let positions: alloc::vec::Vec<[f32; 2]> =
-            data.vertices[start..].iter().map(|v| v.pos).collect();
+            data.vertices[start..vend].iter().map(|v| v.pos).collect();
         let quad = [[10.0, 20.0], [110.0, 20.0], [110.0, 70.0], [10.0, 70.0]];
         assert_eq!(&positions[..4], &quad);
         assert_eq!(&positions[4..], &quad, "reversed corners must normalize");
-        let uvs: alloc::vec::Vec<[f32; 2]> = data.vertices[start..].iter().map(|v| v.uv).collect();
+        let uvs: alloc::vec::Vec<[f32; 2]> =
+            data.vertices[start..vend].iter().map(|v| v.uv).collect();
         let quad_uvs = [[0.25, 0.5], [0.75, 0.5], [0.75, 1.0], [0.25, 1.0]];
         assert_eq!(&uvs[..4], &quad_uvs);
         assert_eq!(&uvs[4..], &quad_uvs);
-        for v in &data.vertices[start..] {
+        for v in &data.vertices[start..vend] {
             assert_eq!(v.col, [9, 8, 7, 255]);
         }
-        let last_cmd = data.commands.last().expect("image must emit a command");
-        assert_eq!(last_cmd.texture, crate::draw::TextureId(42));
-        assert_eq!(last_cmd.elem_count, 12);
+        let img_cmd = data
+            .commands
+            .iter()
+            .find(|c| c.texture == crate::draw::TextureId(42))
+            .expect("image must emit a command");
+        assert_eq!(img_cmd.elem_count, 12);
         assert_all_commands_clipped_to_window(&ctx);
         ctx.render();
     }
@@ -3645,7 +6956,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_line([10.0, 20.0], [30.0, 20.0], [255, 0, 0, 255], 4.0);
                 ui.draw_rect_outline([10.0, 10.0], [30.0, 26.0], [255, 0, 0, 255], 2.0);
                 ui.draw_arc([100.0, 100.0], 40.0, 0.0..=1.0, [255, 0, 0, 255], 2.0);
@@ -3664,7 +6975,7 @@ mod tests {
 
         let n_full = crate::draw::circle_segment_count(40.0 + 1.0);
         let n_arc = ((n_full as f32 * 1.0 / core::f32::consts::TAU).ceil() as usize).max(1);
-        let fringe_quads = 2 + 8 + 2 * n_arc + 4 + 3;
+        let fringe_quads = 4 + 8 + 2 * n_arc + 2 + 4 + 3;
         assert_eq!(on_v - off_v, 4 * fringe_quads);
         assert_eq!(on_i - off_i, 6 * fringe_quads);
     }
@@ -3679,7 +6990,7 @@ mod tests {
         on.new_frame(0.016);
         {
             let mut ui = off.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_line([10.0, 20.0], [30.0, 20.0], [255, 0, 0, 255], 4.0);
                 ui.draw_rect_outline([10.0, 10.0], [30.0, 26.0], [255, 0, 0, 255], 2.0);
                 ui.draw_arc([100.0, 100.0], 40.0, 0.0..=1.0, [255, 0, 0, 255], 2.0);
@@ -3687,7 +6998,7 @@ mod tests {
         }
         {
             let mut ui = on.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_line([10.0, 20.0], [30.0, 20.0], [255, 0, 0, 255], 4.0);
                 ui.draw_rect_outline([10.0, 10.0], [30.0, 26.0], [255, 0, 0, 255], 2.0);
                 ui.draw_arc([100.0, 100.0], 40.0, 0.0..=1.0, [255, 0, 0, 255], 2.0);
@@ -3712,48 +7023,56 @@ mod tests {
         let mut ctx = test_context();
         ctx.style.anti_aliasing = true;
         ctx.new_frame(0.016);
+        let mut start = 0usize;
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
+                start = ui
+                    .ctx
+                    .current_window_mut()
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .len();
                 ui.draw_rect_filled([10.0, 10.0], [30.0, 26.0], [9, 8, 7, 255]);
             });
         }
         let f = crate::draw::FRINGE_WIDTH;
-        let quads = last_quad_positions(&ctx, 5);
+        let quads = quads_from(&ctx, start, 5);
         let expected = [
             [[10.0, 10.0], [30.0, 10.0], [30.0, 26.0], [10.0, 26.0]],
             [
+                [10.0, 10.0],
+                [10.0 - f, 10.0 - f],
+                [30.0 + f, 10.0 - f],
                 [30.0, 10.0],
-                [10.0, 10.0],
-                [10.0, 10.0 - f],
-                [30.0, 10.0 - f],
             ],
             [
-                [10.0, 26.0],
+                [30.0, 10.0],
+                [30.0 + f, 10.0 - f],
+                [30.0 + f, 26.0 + f],
                 [30.0, 26.0],
-                [30.0, 26.0 + f],
-                [10.0, 26.0 + f],
-            ],
-            [
-                [10.0, 10.0],
-                [10.0, 26.0],
-                [10.0 - f, 26.0],
-                [10.0 - f, 10.0],
             ],
             [
                 [30.0, 26.0],
-                [30.0, 10.0],
-                [30.0 + f, 10.0],
-                [30.0 + f, 26.0],
+                [30.0 + f, 26.0 + f],
+                [10.0 - f, 26.0 + f],
+                [10.0, 26.0],
+            ],
+            [
+                [10.0, 26.0],
+                [10.0 - f, 26.0 + f],
+                [10.0 - f, 10.0 - f],
+                [10.0, 10.0],
             ],
         ];
         assert_eq!(quads, expected);
         let data = ctx.windows[0].draw_list.as_draw_data();
-        for quad in data.vertices[data.vertices.len() - 16..].chunks_exact(4) {
+        for quad in data.vertices[start + 4..start + 20].chunks_exact(4) {
             assert_eq!(quad[0].col, [9, 8, 7, 255]);
-            assert_eq!(quad[1].col, [9, 8, 7, 255]);
+            assert_eq!(quad[1].col, [9, 8, 7, 0]);
             assert_eq!(quad[2].col, [9, 8, 7, 0]);
-            assert_eq!(quad[3].col, [9, 8, 7, 0]);
+            assert_eq!(quad[3].col, [9, 8, 7, 255]);
         }
         assert_all_commands_clipped_to_window(&ctx);
         ctx.render();
@@ -3765,7 +7084,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("Canvas", |ui| {
+            ui.window("Canvas", ScrollFlags::NONE, |ui| {
                 ui.draw_rect_filled([10.0, 10.0], [30.0, 26.0], [255, 0, 0, 255]);
                 ui.draw_circle_filled([400.0, 300.0], 300.0, [255, 0, 0, 255]);
                 ui.draw_polygon_filled(
@@ -3809,11 +7128,11 @@ mod tests {
         };
         {
             let mut ui = off.ui();
-            ui.window("Canvas", |ui| draws(ui));
+            ui.window("Canvas", ScrollFlags::NONE, |ui| draws(ui));
         }
         {
             let mut ui = on.ui();
-            ui.window("Canvas", |ui| draws(ui));
+            ui.window("Canvas", ScrollFlags::NONE, |ui| draws(ui));
         }
         let off_data = off.windows[0].draw_list.as_draw_data();
         let on_data = on.windows[0].draw_list.as_draw_data();
@@ -3834,7 +7153,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("W", f);
+            ui.window("W", ScrollFlags::NONE, f);
         }
         ctx.render();
     }
@@ -3865,8 +7184,8 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("A", |_| {});
-            ui.window("B", |ui| {
+            ui.window("A", ScrollFlags::NONE, |_| {});
+            ui.window("B", ScrollFlags::NONE, |ui| {
                 let popup_id = ui.widget_id("##popup");
                 ui.open_popup(popup_id);
                 ui.popup(popup_id, popup_rect, |_| {});
@@ -3906,7 +7225,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("W", |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
                 let popup_id = ui.widget_id("##popup");
                 ui.open_popup(popup_id);
                 ui.popup(popup_id, [400.0, 300.0, 560.0, 460.0], |_| {});
@@ -3946,7 +7265,7 @@ mod tests {
             &mut ctx,
             InputState {
                 mouse_pos: press,
-                mouse_down: [true, false, false],
+                mouse_down: [true, false, false, false, false],
                 ..Default::default()
             },
             |ui| {
@@ -4031,7 +7350,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("W", |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
                 let a = ui.widget_id("##a");
                 let b = ui.widget_id("##b");
                 ui.popup(a, rect_a, |_| {});
@@ -4071,7 +7390,7 @@ mod tests {
         ctx.new_frame(0.016);
         {
             let mut ui = ctx.ui();
-            ui.window("W", |ui| {
+            ui.window("W", ScrollFlags::NONE, |ui| {
                 let popup_id = ui.widget_id("##popup");
                 ui.popup(popup_id, popup_rect, |_| {});
             });
@@ -4184,7 +7503,7 @@ mod tests {
             &mut ctx,
             InputState {
                 mouse_pos: at,
-                mouse_down: [true, false, false],
+                mouse_down: [true, false, false, false, false],
                 ..Default::default()
             },
             |ui| {
@@ -4460,7 +7779,7 @@ mod tests {
                     ctx,
                     InputState {
                         mouse_pos: mouse,
-                        mouse_down: [down, false, false],
+                        mouse_down: [down, false, false, false, false],
                         ..Default::default()
                     },
                     |ui| {
@@ -4559,6 +7878,7 @@ mod tests {
     mod collapsing_header {
         use crate::context::{Context, WidgetState};
         use crate::input::InputState;
+        use crate::scroll::ScrollFlags;
         use crate::ui::Ui;
         use crate::widgets::test_support::*;
 
@@ -4727,16 +8047,16 @@ mod tests {
         ) {
             ctx.set_input(InputState {
                 mouse_pos: mouse,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 ..Default::default()
             });
             ctx.new_frame(0.016);
             {
                 let mut ui = ctx.ui();
-                ui.window("W1", |ui| {
+                ui.window("W1", ScrollFlags::NONE, |ui| {
                     ui.collapsing_header("Settings", |ui| mark(ui, MARK_W1));
                 });
-                ui.window("W2", |ui| {
+                ui.window("W2", ScrollFlags::NONE, |ui| {
                     if let Some(r) = record_w2_row {
                         *r = header_row(ui);
                     }
@@ -4928,7 +8248,7 @@ mod tests {
                     ctx,
                     InputState {
                         mouse_pos: mouse,
-                        mouse_down: [down, false, false],
+                        mouse_down: [down, false, false, false, false],
                         ..Default::default()
                     },
                     |ui| {
@@ -5060,6 +8380,330 @@ mod tests {
         }
     }
 
+    mod searchable_combo {
+        use crate::input::{InputState, Key, KeyEvent};
+        use crate::ui::{search_matches, Ui};
+        use crate::widgets::test_support::{frame_with_input, test_context};
+        use alloc::string::String;
+
+        const ITEMS: [&str; 3] = ["Alpha", "Bravo", "Charlie"];
+
+        fn declare(ui: &mut Ui, selected: &mut usize, query: &mut String) -> bool {
+            ui.searchable_combo("Find", &ITEMS, selected, query)
+        }
+
+        #[test]
+        fn filtering_is_case_insensitive_without_losing_original_indices() {
+            assert!(search_matches("Alpha Bravo", "BRAV"));
+            assert!(search_matches("café", "fé"));
+            assert!(!search_matches("Alpha", "Bravo"));
+            assert!(!search_matches("ab", "abc"));
+        }
+
+        #[test]
+        fn getter_only_reads_selected_item_while_closed() {
+            let mut ctx = test_context();
+            let mut selected = 9_999;
+            let mut query = String::new();
+            let mut calls = 0;
+            frame_with_input(&mut ctx, 0.016, InputState::default(), |ui| {
+                assert_eq!(
+                    ui.searchable_combo_with(
+                        "Find",
+                        10_000,
+                        |index| {
+                            calls += 1;
+                            assert_eq!(index, 9_999);
+                            Some("last item")
+                        },
+                        &mut selected,
+                        &mut query
+                    ),
+                    Some(false)
+                );
+            });
+            assert_eq!(calls, 1);
+        }
+
+        #[test]
+        fn invalid_open_item_does_not_change_selection() {
+            let mut ctx = test_context();
+            let mut selected = 0;
+            let mut query = String::new();
+            let mut button = [0.0; 2];
+            frame_with_input(&mut ctx, 0.016, InputState::default(), |ui| {
+                button = ui.ctx.current_window_mut().cursor.next_pos();
+                assert_eq!(
+                    ui.searchable_combo_with(
+                        "Find",
+                        2,
+                        |index| (index == 0).then_some("valid"),
+                        &mut selected,
+                        &mut query
+                    ),
+                    Some(false)
+                );
+            });
+            let at = [button[0] + 15.0, button[1] + 10.0];
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    mouse_pos: at,
+                    mouse_down: [true, false, false, false, false],
+                    ..Default::default()
+                },
+                |ui| {
+                    assert_eq!(
+                        ui.searchable_combo_with(
+                            "Find",
+                            2,
+                            |index| (index == 0).then_some("valid"),
+                            &mut selected,
+                            &mut query
+                        ),
+                        Some(false)
+                    );
+                },
+            );
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    mouse_pos: at,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert_eq!(
+                        ui.searchable_combo_with(
+                            "Find",
+                            2,
+                            |index| (index == 0).then_some("valid"),
+                            &mut selected,
+                            &mut query
+                        ),
+                        None
+                    );
+                },
+            );
+            assert_eq!(selected, 0);
+            assert!(ctx.open_popup.is_none());
+        }
+
+        #[test]
+        fn typing_filters_and_enter_selects_the_matching_item() {
+            let mut ctx = test_context();
+            let mut selected = 0;
+            let mut query = String::new();
+            let mut button = [0.0; 2];
+            frame_with_input(&mut ctx, 0.016, InputState::default(), |ui| {
+                button = ui.ctx.current_window_mut().cursor.next_pos();
+                assert!(!declare(ui, &mut selected, &mut query));
+            });
+            let at = [button[0] + 15.0, button[1] + 10.0];
+            for down in [true, false] {
+                frame_with_input(
+                    &mut ctx,
+                    0.016,
+                    InputState {
+                        mouse_pos: at,
+                        mouse_down: [down, false, false, false, false],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert!(!declare(ui, &mut selected, &mut query));
+                    },
+                );
+            }
+            assert!(ctx.open_popup.is_some());
+            let keys = [KeyEvent::Char('B'), KeyEvent::Char('r')];
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    keys: &keys,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(!declare(ui, &mut selected, &mut query));
+                },
+            );
+            assert_eq!(query, "Br");
+            let enter = [KeyEvent::Press(Key::Enter)];
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    keys: &enter,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(declare(ui, &mut selected, &mut query));
+                },
+            );
+            assert_eq!(selected, 1);
+            assert!(ctx.open_popup.is_none());
+            assert!(ctx.active.is_none());
+        }
+
+        #[test]
+        fn escape_closes_without_leaving_search_focused() {
+            let mut ctx = test_context();
+            let mut selected = 0;
+            let mut query = String::new();
+            let mut button = [0.0; 2];
+            frame_with_input(&mut ctx, 0.016, InputState::default(), |ui| {
+                button = ui.ctx.current_window_mut().cursor.next_pos();
+                declare(ui, &mut selected, &mut query);
+            });
+            let at = [button[0] + 15.0, button[1] + 10.0];
+            for down in [true, false] {
+                frame_with_input(
+                    &mut ctx,
+                    0.016,
+                    InputState {
+                        mouse_pos: at,
+                        mouse_down: [down, false, false, false, false],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        declare(ui, &mut selected, &mut query);
+                    },
+                );
+            }
+            assert!(ctx.open_popup.is_some());
+            let escape = [KeyEvent::Press(Key::Escape)];
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    keys: &escape,
+                    ..Default::default()
+                },
+                |ui| {
+                    declare(ui, &mut selected, &mut query);
+                },
+            );
+            assert!(ctx.open_popup.is_none());
+            assert!(ctx.active.is_none());
+            assert_eq!(selected, 0);
+        }
+
+        #[test]
+        fn keyboard_highlight_scrolls_to_reveal_later_results() {
+            const MANY: [&str; 12] = [
+                "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11",
+            ];
+            let mut ctx = test_context();
+            let mut selected = 0;
+            let mut query = String::new();
+            let mut button = [0.0; 2];
+            frame_with_input(&mut ctx, 0.016, InputState::default(), |ui| {
+                button = ui.ctx.current_window_mut().cursor.next_pos();
+                ui.searchable_combo("Find", &MANY, &mut selected, &mut query);
+            });
+            let at = [button[0] + 15.0, button[1] + 10.0];
+            for down in [true, false] {
+                frame_with_input(
+                    &mut ctx,
+                    0.016,
+                    InputState {
+                        mouse_pos: at,
+                        mouse_down: [down, false, false, false, false],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.searchable_combo("Find", &MANY, &mut selected, &mut query);
+                    },
+                );
+            }
+            let downs = [KeyEvent::Press(Key::Down); 10];
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    keys: &downs,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.searchable_combo("Find", &MANY, &mut selected, &mut query);
+                },
+            );
+            let mut ids = crate::id::IdStack::new();
+            ids.push("W");
+            let combo = ids.id("Find");
+            ids.push_id(combo);
+            let scroll = ids.id("##search_results");
+            assert!(
+                matches!(ctx.widget_states.get(&scroll), Some(crate::context::WidgetState::Scroll { offset, .. }) if *offset > 0.0)
+            );
+            let enter = [KeyEvent::Press(Key::Enter)];
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    keys: &enter,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(ui.searchable_combo("Find", &MANY, &mut selected, &mut query));
+                },
+            );
+            assert_eq!(selected, 10);
+        }
+
+        #[test]
+        fn clicking_a_result_selects_its_original_index() {
+            let mut ctx = test_context();
+            let mut selected = 0;
+            let mut query = String::new();
+            let mut button = [0.0; 2];
+            frame_with_input(&mut ctx, 0.016, InputState::default(), |ui| {
+                button = ui.ctx.current_window_mut().cursor.next_pos();
+                declare(ui, &mut selected, &mut query);
+            });
+            let at = [button[0] + 15.0, button[1] + 10.0];
+            for down in [true, false] {
+                frame_with_input(
+                    &mut ctx,
+                    0.016,
+                    InputState {
+                        mouse_pos: at,
+                        mouse_down: [down, false, false, false, false],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        declare(ui, &mut selected, &mut query);
+                    },
+                );
+            }
+            let popup = ctx.popup_rect.expect("search popup opened");
+            let style = ctx.style;
+            let row_h = ctx.font.line_height() + 2.0 * style.frame_padding[1];
+            let row_step = row_h + style.item_spacing[1];
+            let bravo = [
+                popup[0] + style.window_padding[0] + 16.0,
+                popup[1] + style.window_padding[1] + row_step * 2.0 + row_h * 0.5,
+            ];
+            for down in [true, false] {
+                frame_with_input(
+                    &mut ctx,
+                    0.016,
+                    InputState {
+                        mouse_pos: bravo,
+                        mouse_down: [down, false, false, false, false],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        declare(ui, &mut selected, &mut query);
+                    },
+                );
+            }
+            assert_eq!(selected, 1);
+            assert!(ctx.open_popup.is_none());
+        }
+    }
+
     mod combo {
         use crate::context::{Context, WidgetState};
         use crate::input::{InputState, Key, KeyEvent};
@@ -5149,6 +8793,13 @@ mod tests {
         }
 
         fn assert_below_fold_glyphs_carry_region_clip(ctx: &Context, region: [f32; 4]) {
+            let inset = crate::scroll::content_inset(&ctx.style, region);
+            let content_clip = [
+                region[0] + inset,
+                region[1] + inset,
+                region[2] - inset,
+                region[3] - inset,
+            ];
             let data = ctx.overlay.as_draw_data();
             let mut offset = 0usize;
             let mut below = 0usize;
@@ -5159,10 +8810,10 @@ mod tests {
                         let v = data.vertices[i as usize];
                         if v.pos[1] > region[3] && !ctx.font.uv_samples_shape_mask(v.uv) {
                             below += 1;
-                            for (c, &expected) in region.iter().enumerate() {
+                            for (c, &expected) in content_clip.iter().enumerate() {
                                 assert!(
                                     (cmd.clip_rect[c] - expected).abs() < 1e-3,
-                                    "a glyph below the fold must carry the region clip, \
+                                    "a glyph below the fold must carry the inset content clip, \
                                      got {:?}",
                                     cmd.clip_rect
                                 );
@@ -5207,7 +8858,7 @@ mod tests {
             let at = center(button);
             let input = |down: bool| InputState {
                 mouse_pos: at,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 viewport_size: viewport,
                 ..Default::default()
             };
@@ -5305,7 +8956,9 @@ mod tests {
             assert_eq!(fill_color_at(&ctx, rect), Some(style.widget_bg));
 
             let pen_x = rect[0] + style.frame_padding[0];
-            let (_, quad) = ctx.font.glyph_quad('G', [pen_x, 0.0]);
+            let (_, quad) = ctx
+                .font
+                .glyph_quad(crate::font::FontId::DEFAULT, 'G', [pen_x, 0.0]);
             let expected_min_x = quad.expect("'G' has ink").min[0];
             let actual_min_x =
                 glyph_min_x_in(&ctx, rect).expect("the current item text must be emitted");
@@ -5599,7 +9252,8 @@ mod tests {
             let at = center(region);
             wheel_frame(&mut ctx, at, -100.0, viewport, &mut selected);
             let (offset, content_height) = list_scroll_state(&ctx, "Color").unwrap();
-            let max_offset = content_height - (region[3] - region[1]);
+            let inset = crate::scroll::content_inset(&ctx.style, region);
+            let max_offset = content_height - (region[3] - region[1] - 2.0 * inset);
             assert!(offset > 0.0);
             assert!(
                 (offset - max_offset).abs() < 1e-4,
@@ -5645,7 +9299,7 @@ mod tests {
             let at = center(last);
             let input = |down: bool| InputState {
                 mouse_pos: at,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 viewport_size: viewport,
                 ..Default::default()
             };
@@ -5675,7 +9329,7 @@ mod tests {
             let at = center(button);
             let input = |down: bool| InputState {
                 mouse_pos: at,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 viewport_size: viewport,
                 ..Default::default()
             };
@@ -5895,7 +9549,7 @@ mod tests {
             let viewport = [260.0, 400.0];
             let input = |pos: [f32; 2], down: bool| InputState {
                 mouse_pos: pos,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 viewport_size: viewport,
                 ..Default::default()
             };
@@ -6362,7 +10016,7 @@ mod tests {
             let viewport = [250.0, 180.0];
             let input = |pos: [f32; 2], down: bool| InputState {
                 mouse_pos: pos,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 viewport_size: viewport,
                 ..Default::default()
             };
@@ -8206,13 +11860,36 @@ mod tests {
                 0.016,
                 InputState {
                     mouse_pos: AWAY,
-                    mouse_down: [false, true, false],
+                    mouse_down: [false, true, false, false, false],
                     ..Default::default()
                 },
                 |ui| changed = ui.keybind("Jump", &mut binding),
             );
             assert!(changed);
             assert_eq!(binding, KeyBinding::Mouse(1));
+        }
+
+        #[test]
+        fn a_mouse4_press_while_armed_binds_the_back_button() {
+            let mut ctx = test_context();
+            let mut binding = KeyBinding::None;
+            let button = settle(&mut ctx, &mut binding);
+            arm(&mut ctx, button, &mut binding);
+
+            let mut changed = false;
+            frame_with_input(
+                &mut ctx,
+                0.016,
+                InputState {
+                    mouse_pos: AWAY,
+                    mouse_down: [false, false, false, true, false],
+                    ..Default::default()
+                },
+                |ui| changed = ui.keybind("Jump", &mut binding),
+            );
+            assert!(changed);
+            assert_eq!(binding, KeyBinding::Mouse(3));
+            assert_eq!(alloc::string::ToString::to_string(&binding), "Mouse4");
         }
 
         #[test]
@@ -8589,8 +12266,9 @@ mod tests {
             hover(&mut ctx, TOOLTIP_DELAY, at);
             assert!(!overlay_is_empty(&ctx));
             frame(&mut ctx, at, true, declare);
+            let tooltip = tooltip_rect(&mut ctx, at, "tip");
             assert!(
-                overlay_is_empty(&ctx),
+                !overlay_has_glyphs_in(&ctx, tooltip),
                 "the tooltip must hide while a capture is active"
             );
         }
@@ -9319,6 +12997,7 @@ mod tests {
         use crate::context::Context;
         use crate::id::{Id, IdStack};
         use crate::input::InputState;
+        use crate::scroll::ScrollFlags;
 
         const DEJAVU_SANS: &[u8] = include_bytes!("../tests/assets/DejaVuSans.ttf");
         const AWAY: [f32; 2] = [-50.0, -50.0];
@@ -9388,14 +13067,14 @@ mod tests {
         fn frame_ab(ctx: &mut Context, mouse: [f32; 2], down: bool, a: &mut bool, b: &mut bool) {
             ctx.set_input(InputState {
                 mouse_pos: mouse,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 ..Default::default()
             });
             ctx.new_frame(0.016);
             {
                 let mut ui = ctx.ui();
-                ui.window("A", |ui| *a = ui.button("A-btn"));
-                ui.window("B", |ui| *b = ui.button("B-btn"));
+                ui.window("A", ScrollFlags::NONE, |ui| *a = ui.button("A-btn"));
+                ui.window("B", ScrollFlags::NONE, |ui| *b = ui.button("B-btn"));
             }
             ctx.render();
         }
@@ -9569,20 +13248,20 @@ mod tests {
         ) {
             ctx.set_input(InputState {
                 mouse_pos: mouse,
-                mouse_down: [down, false, false],
+                mouse_down: [down, false, false, false, false],
                 ..Default::default()
             });
             ctx.new_frame(0.016);
             {
                 let mut ui = ctx.ui();
-                ui.window("A", |ui| {
+                ui.window("A", ScrollFlags::NONE, |ui| {
                     *a = ui.button("A-btn");
                     if *a {
                         ui.open_popup(POPUP_ID);
                     }
                     ui.popup(POPUP_ID, popup_rect, |ui| *p = ui.button("P-btn"));
                 });
-                ui.window("B", |ui| *b = ui.button("B-btn"));
+                ui.window("B", ScrollFlags::NONE, |ui| *b = ui.button("B-btn"));
             }
             ctx.render();
         }
@@ -10066,6 +13745,7 @@ mod tests {
         use crate::context::{Context, MIN_WINDOW_SIZE};
         use crate::id::{Id, IdStack};
         use crate::input::InputState;
+        use crate::scroll::ScrollFlags;
         use crate::ui::RESIZE_GRIP_SIZE;
 
         const AWAY: [f32; 2] = [-50.0, -50.0];
@@ -10106,18 +13786,38 @@ mod tests {
         ) {
             ctx.set_input(InputState {
                 mouse_pos,
-                mouse_down: [left_down, false, false],
+                mouse_down: [left_down, false, false, false, false],
                 ..Default::default()
             });
             ctx.new_frame(0.016);
-            ctx.ui().window("Win", f);
+            ctx.ui().window("Win", ScrollFlags::NONE, f);
             ctx.render();
+        }
+
+        fn marker_vertices(ctx: &Context, title: &str) -> alloc::vec::Vec<[f32; 2]> {
+            let zone = grip_zone(ctx, title);
+            let window = &ctx.windows[widx(ctx, title)];
+            window
+                .draw_list
+                .as_draw_data()
+                .vertices
+                .iter()
+                .filter(|v| {
+                    v.col == ctx.style.title_text
+                        && v.pos[0] >= zone[0]
+                        && v.pos[0] <= zone[2]
+                        && v.pos[1] >= zone[1]
+                        && v.pos[1] <= zone[3]
+                })
+                .map(|v| v.pos)
+                .collect()
         }
 
         #[test]
         fn grip_marker_renders_a_triangle_in_the_bottom_right_corner() {
             let mut ctx = super::test_context();
             ctx.style.anti_aliasing = false;
+            ctx.style.corner_rounding = 0.0;
             super::frame(&mut ctx, AWAY, false, &["Win"]);
             let zone = grip_zone(&ctx, "Win");
             let window = &ctx.windows[widx(&ctx, "Win")];
@@ -10142,19 +13842,7 @@ mod tests {
                 [rect[2], rect[3]],
                 [rect[2] - RESIZE_GRIP_SIZE, rect[3]],
             ];
-            let data = window.draw_list.as_draw_data();
-            let marker: alloc::vec::Vec<[f32; 2]> = data
-                .vertices
-                .iter()
-                .filter(|v| {
-                    v.col == ctx.style.title_text
-                        && v.pos[0] >= zone[0]
-                        && v.pos[0] <= zone[2]
-                        && v.pos[1] >= zone[1]
-                        && v.pos[1] <= zone[3]
-                })
-                .map(|v| v.pos)
-                .collect();
+            let marker = marker_vertices(&ctx, "Win");
             assert_eq!(
                 marker.len(),
                 3,
@@ -10166,6 +13854,99 @@ mod tests {
                     "marker triangle must contain corner {corner:?}; got {marker:?}"
                 );
             }
+        }
+
+        #[test]
+        fn grip_marker_follows_the_corner_rounding() {
+            let mut ctx = super::test_context();
+            ctx.style.anti_aliasing = false;
+            super::frame(&mut ctx, AWAY, false, &["Win"]);
+            let window = &ctx.windows[widx(&ctx, "Win")];
+            let rect = window.rect();
+            let r = ctx.style.corner_rounding;
+            assert_eq!(r, 4.0, "the probe expects the default rounding");
+            let inset = r * (1.0 - core::f32::consts::FRAC_1_SQRT_2);
+
+            let expected = [
+                [rect[2] - inset, rect[3] - RESIZE_GRIP_SIZE],
+                [rect[2] - inset, rect[3] - inset],
+                [rect[2] - RESIZE_GRIP_SIZE, rect[3] - inset],
+            ];
+            let marker = marker_vertices(&ctx, "Win");
+            assert_eq!(
+                marker.len(),
+                3,
+                "the marker must be one triangle; got vertices {marker:?}"
+            );
+            for corner in expected {
+                assert!(
+                    marker.contains(&corner),
+                    "marker triangle must contain corner {corner:?}; got {marker:?}"
+                );
+            }
+            let arc_center = [rect[2] - r, rect[3] - r];
+            let tip = [rect[2] - inset, rect[3] - inset];
+            let d = ((tip[0] - arc_center[0]).powi(2) + (tip[1] - arc_center[1]).powi(2)).sqrt();
+            assert!(
+                (d - r).abs() <= 1e-3,
+                "the tip must lie ON the corner arc: distance {d} != radius {r}"
+            );
+            for v in &marker {
+                if v[0] >= arc_center[0] && v[1] >= arc_center[1] {
+                    let dv =
+                        ((v[0] - arc_center[0]).powi(2) + (v[1] - arc_center[1]).powi(2)).sqrt();
+                    assert!(
+                        dv <= r + 1e-3,
+                        "marker vertex {v:?} outside the rounded silhouette: {dv} > {r}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn grip_marker_is_emitted_after_the_windows_content() {
+            let mut ctx = super::test_context();
+            ctx.style.anti_aliasing = false;
+            const CONTENT: [u8; 4] = [7, 7, 7, 255];
+            super::frame(&mut ctx, AWAY, false, &["Win"]);
+            let zone = grip_zone(&ctx, "Win");
+            let mut body = |ui: &mut crate::ui::Ui<'_>| {
+                ui.draw_rect_filled([zone[0], zone[1]], [zone[2], zone[3]], CONTENT);
+            };
+            frame_win(&mut ctx, AWAY, false, &mut body);
+
+            let window = &ctx.windows[widx(&ctx, "Win")];
+            let data = window.draw_list.as_draw_data();
+            let title_text = ctx.style.title_text;
+            let marker_idx: alloc::vec::Vec<usize> = data
+                .vertices
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| {
+                    v.col == title_text
+                        && v.pos[0] >= zone[0]
+                        && v.pos[0] <= zone[2]
+                        && v.pos[1] >= zone[1]
+                        && v.pos[1] <= zone[3]
+                })
+                .map(|(i, _)| i)
+                .collect();
+            let last_content = data
+                .vertices
+                .iter()
+                .rposition(|v| v.col == CONTENT)
+                .expect("the content rect must emit vertices");
+            assert_eq!(marker_idx.len(), 3, "the marker must be one triangle");
+            assert!(
+                marker_idx.iter().all(|&m| m > last_content),
+                "every marker vertex must be emitted after the content \
+                 (marker indices {marker_idx:?}, last content index {last_content})"
+            );
+            assert_eq!(
+                *marker_idx.last().unwrap(),
+                data.vertices.len() - 1,
+                "the marker must be the window's last emitted geometry"
+            );
         }
 
         #[test]
@@ -10413,6 +14194,11 @@ mod tests {
             stack.id("region")
         }
 
+        fn content_clip(ctx: &Context, region: [f32; 4]) -> [f32; 4] {
+            let i = crate::scroll::content_inset(&ctx.style, region);
+            [region[0] + i, region[1] + i, region[2] - i, region[3] - i]
+        }
+
         fn button_id_in_region(label: &str) -> Id {
             let mut stack = crate::id::IdStack::new();
             stack.push("W");
@@ -10479,7 +14265,7 @@ mod tests {
                 ctx,
                 InputState {
                     mouse_pos: mouse,
-                    mouse_down: [left_down, false, false],
+                    mouse_down: [left_down, false, false, false, false],
                     ..Default::default()
                 },
                 f,
@@ -10505,13 +14291,14 @@ mod tests {
             );
             assert!(last[3] < window_rect[3]);
 
+            let content_clip = content_clip(&ctx, region);
             let data = ctx.windows[0].draw_list.as_draw_data();
             let mut has_region_clip_cmd = false;
             let mut overflow_verts = 0usize;
             let mut offset = 0usize;
             for cmd in data.commands {
                 let next = offset + cmd.elem_count as usize;
-                if cmd.clip_rect == region {
+                if cmd.clip_rect == content_clip {
                     has_region_clip_cmd = true;
                 }
                 for &i in &data.indices[offset..next] {
@@ -10519,8 +14306,8 @@ mod tests {
                     if v.pos[1] > region[3] && v.pos[1] < last[3] + 1.0 {
                         overflow_verts += 1;
                         assert_eq!(
-                            cmd.clip_rect, region,
-                            "overflow vertex {:?} must carry the region clip, got {:?}",
+                            cmd.clip_rect, content_clip,
+                            "overflow vertex {:?} must carry the inset content clip, got {:?}",
                             v.pos, cmd.clip_rect
                         );
                     }
@@ -10529,7 +14316,7 @@ mod tests {
             }
             assert!(
                 has_region_clip_cmd,
-                "no command carries the region clip rect"
+                "no command carries the inset content clip rect"
             );
             assert!(overflow_verts > 0, "no vertices found below the region");
         }
@@ -10552,6 +14339,66 @@ mod tests {
                 ctx.windows[0].draw_list.current_clip(),
                 ctx.windows[0].rect(),
                 "the region's clip push must be popped after its closure"
+            );
+        }
+
+        #[test]
+        fn the_content_inset_covers_the_border_and_corner_crescent() {
+            let ctx = super::test_context();
+            let style = ctx.style;
+            let rect = [0.0, 0.0, 200.0, 60.0];
+            let inset = crate::scroll::content_inset(&style, rect);
+            let expected = style.border_size
+                + style.corner_rounding * (1.0 - core::f32::consts::FRAC_1_SQRT_2);
+            assert!((inset - expected).abs() < 1e-6, "{inset} vs {expected}");
+
+            let mut crisp = style;
+            crisp.corner_rounding = 0.0;
+            assert_eq!(
+                crate::scroll::content_inset(&crisp, rect),
+                crisp.border_size
+            );
+            let mut bare = style;
+            bare.corner_rounding = 0.0;
+            bare.border_size = 0.0;
+            assert_eq!(crate::scroll::content_inset(&bare, rect), 0.0);
+
+            let tiny = [0.0, 0.0, 3.0, 3.0];
+            let inset = crate::scroll::content_inset(&style, tiny);
+            let expected = style.border_size + 1.5 * (1.0 - core::f32::consts::FRAC_1_SQRT_2);
+            assert!((inset - expected).abs() < 1e-6, "{inset} vs {expected}");
+            assert!(inset <= 1.5, "the inset never exceeds half the region");
+        }
+
+        #[test]
+        fn content_emits_under_the_inset_clip_while_the_panel_keeps_the_window_clip() {
+            let mut ctx = super::test_context();
+            let mut probe = Probe {
+                region: [0.0; 4],
+                target_rect: [0.0; 4],
+                target_clicked: false,
+            };
+            frame(&mut ctx, AWAY, 0.0, |ui| declare(ui, "B0", &mut probe));
+            let region = probe.region;
+            let clip = content_clip(&ctx, region);
+            let window_rect = ctx.windows[0].rect();
+            assert!(clip[0] > region[0] && clip[1] > region[1]);
+            assert!(clip[2] < region[2] && clip[3] < region[3]);
+            let data = ctx.windows[0].draw_list.as_draw_data();
+            let mut content_cmds = 0usize;
+            let mut panel_cmds = 0usize;
+            for cmd in data.commands {
+                if cmd.clip_rect == clip {
+                    content_cmds += 1;
+                }
+                if cmd.clip_rect == window_rect {
+                    panel_cmds += 1;
+                }
+            }
+            assert!(content_cmds > 0, "region content rides the inset clip");
+            assert!(
+                panel_cmds > 0,
+                "the region panel keeps the enclosing window clip"
             );
         }
 
@@ -10635,6 +14482,10 @@ mod tests {
                 declare(ui, "B0", &mut probe)
             });
             let (offset, content_height) = scroll_state(&ctx);
+            let visible_h = {
+                let clip = content_clip(&ctx, region);
+                clip[3] - clip[1]
+            };
             assert!(
                 content_height > region_h,
                 "content must overflow: {content_height}"
@@ -10642,7 +14493,7 @@ mod tests {
             assert!(offset > 0.0);
             assert_eq!(
                 offset,
-                (content_height - region_h).max(0.0),
+                (content_height - visible_h).max(0.0),
                 "the offset must clamp to the bottom of the content"
             );
 
@@ -10881,7 +14732,7 @@ mod tests {
                 InputState {
                     mouse_pos: mouse,
                     mouse_wheel: wheel,
-                    mouse_down: [left_down, false, false],
+                    mouse_down: [left_down, false, false, false, false],
                     viewport_size: viewport,
                     ..Default::default()
                 },
@@ -10984,6 +14835,2989 @@ mod tests {
         }
     }
 
+    mod child {
+        use crate::context::{Context, WidgetState};
+        use crate::id::Id;
+        use crate::input::InputState;
+        use crate::scroll::ScrollFlags;
+        use crate::ui::Ui;
+        use crate::widgets::test_support::next_text_rect;
+        use alloc::vec::Vec;
+
+        const AWAY: [f32; 2] = [-50.0, -50.0];
+        const SIZE: [f32; 2] = [200.0, 60.0];
+
+        fn center(rect: [f32; 4]) -> [f32; 2] {
+            [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0]
+        }
+
+        fn frame(ctx: &mut Context, mouse: [f32; 2], wheel: f32, f: impl FnOnce(&mut Ui)) {
+            super::popup_frame(
+                ctx,
+                InputState {
+                    mouse_pos: mouse,
+                    mouse_wheel: wheel,
+                    ..Default::default()
+                },
+                f,
+            );
+        }
+
+        fn click_frame(
+            ctx: &mut Context,
+            mouse: [f32; 2],
+            left_down: bool,
+            f: impl FnOnce(&mut Ui),
+        ) {
+            super::popup_frame(
+                ctx,
+                InputState {
+                    mouse_pos: mouse,
+                    mouse_down: [left_down, false, false, false, false],
+                    ..Default::default()
+                },
+                f,
+            );
+        }
+
+        fn child_id(label: &str) -> Id {
+            let mut stack = crate::id::IdStack::new();
+            stack.push("W");
+            stack.id(label)
+        }
+
+        fn nested_id(parent: Id, label: &str) -> Id {
+            let mut stack = crate::id::IdStack::new();
+            stack.push("W");
+            stack.push_id(parent);
+            stack.id(label)
+        }
+
+        fn scroll_state_of(ctx: &Context, id: Id) -> Option<(f32, f32)> {
+            match ctx.widget_states.get(&id) {
+                Some(WidgetState::Scroll {
+                    offset,
+                    content_height,
+                }) => Some((*offset, *content_height)),
+                _ => None,
+            }
+        }
+
+        fn declare_fitting(ui: &mut Ui, flags: ScrollFlags) {
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.child("c", SIZE, flags, |ui| {
+                    ui.label("one line, fits easily");
+                });
+            });
+        }
+
+        #[test]
+        fn none_and_wheel_are_byte_identical_when_content_fits() {
+            let mut none_ctx = super::test_context();
+            let none = super::scripted_frame(&mut none_ctx, AWAY, false, 0.0, |ui| {
+                declare_fitting(ui, ScrollFlags::NONE)
+            });
+            let mut wheel_ctx = super::test_context();
+            let wheel = super::scripted_frame(&mut wheel_ctx, AWAY, false, 0.0, |ui| {
+                declare_fitting(ui, ScrollFlags::WHEEL)
+            });
+            assert_eq!(
+                none, wheel,
+                "content that fits must render identically regardless of scrollability"
+            );
+        }
+
+        fn declare_child_wheel(ui: &mut Ui) {
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.child("Log", [200.0, 96.0], ScrollFlags::WHEEL, |ui| {
+                    for _ in 0..20 {
+                        ui.label("log line");
+                    }
+                });
+            });
+        }
+
+        fn declare_scroll_region_sugar(ui: &mut Ui) {
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.scroll_region("Log", [200.0, 96.0], |ui| {
+                    for _ in 0..20 {
+                        ui.label("log line");
+                    }
+                });
+            });
+        }
+
+        fn declare_child_pair(ui: &mut Ui) {
+            assert!(ui.begin_window("W", ScrollFlags::NONE));
+            let scope = ui.begin_child("Log", [200.0, 96.0], ScrollFlags::WHEEL);
+            for _ in 0..20 {
+                ui.label("log line");
+            }
+            ui.end_child(scope);
+            ui.end_window();
+        }
+
+        fn wheel_script(
+            declare: impl Fn(&mut Ui),
+        ) -> Vec<(
+            Vec<crate::draw::DrawVert>,
+            Vec<u32>,
+            Vec<crate::draw::DrawCmd>,
+        )> {
+            let mut ctx = super::test_context();
+            let mut frames = Vec::new();
+            frames.push(super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui)
+            }));
+            let origin = super::content_origin(&ctx);
+            let over = [origin[0] + 10.0, origin[1] + 10.0];
+            for _ in 0..3 {
+                frames.push(super::scripted_frame(&mut ctx, over, false, -1.0, |ui| {
+                    declare(ui)
+                }));
+            }
+            frames
+        }
+
+        #[test]
+        fn child_wheel_matches_scroll_region_sugar_on_overflowing_content() {
+            let child_frames = wheel_script(declare_child_wheel);
+            assert_ne!(
+                child_frames[0], child_frames[2],
+                "sanity: the wheel must have actually scrolled the content"
+            );
+            assert_eq!(
+                child_frames,
+                wheel_script(declare_scroll_region_sugar),
+                "scroll_region must remain byte-identical sugar for child(.., ScrollFlags::WHEEL, ..)"
+            );
+        }
+
+        #[test]
+        fn child_closure_matches_begin_end_pair() {
+            let closure = wheel_script(declare_child_wheel);
+            assert_ne!(closure[0], closure[2]);
+            assert_eq!(closure, wheel_script(declare_child_pair));
+        }
+
+        struct Probe {
+            child: [f32; 4],
+            target_rect: [f32; 4],
+            target_clicked: bool,
+        }
+
+        fn declare_none_with_buttons(ui: &mut Ui, target: &str, probe: &mut Probe) {
+            let pos = ui.ctx.current_window_mut().cursor.next_pos();
+            probe.child = [pos[0], pos[1], pos[0] + SIZE[0], pos[1] + SIZE[1]];
+            ui.child("c", SIZE, ScrollFlags::NONE, |ui| {
+                for i in 0..10 {
+                    let label = alloc::format!("B{i}");
+                    if label == target {
+                        probe.target_rect = next_text_rect(ui, &label);
+                        probe.target_clicked = ui.button(&label);
+                    } else {
+                        ui.button(&label);
+                    }
+                }
+            });
+        }
+
+        #[test]
+        fn none_offset_stays_zero_across_wheel_input_and_hides_content_below_the_fold() {
+            let mut ctx = super::test_context();
+            let id = child_id("c");
+            let mut probe = Probe {
+                child: [0.0; 4],
+                target_rect: [0.0; 4],
+                target_clicked: false,
+            };
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_none_with_buttons(ui, "B9", &mut probe)
+            });
+            let child_rect = probe.child;
+            let hidden_rect = probe.target_rect;
+            assert!(
+                hidden_rect[1] > child_rect[3],
+                "B9 must start below the fold: {hidden_rect:?} vs {child_rect:?}"
+            );
+            assert_eq!(scroll_state_of(&ctx, id).unwrap().0, 0.0);
+
+            for _ in 0..3 {
+                frame(&mut ctx, center(child_rect), -1.0, |ui| {
+                    declare_none_with_buttons(ui, "B9", &mut probe)
+                });
+                assert_eq!(
+                    scroll_state_of(&ctx, id).unwrap().0,
+                    0.0,
+                    "a NONE child must never scroll"
+                );
+                assert_eq!(probe.target_rect, hidden_rect, "layout must never shift");
+            }
+
+            let hidden_point = center(hidden_rect);
+            let b9 = nested_id(id, "B9");
+            click_frame(&mut ctx, hidden_point, false, |ui| {
+                declare_none_with_buttons(ui, "B9", &mut probe)
+            });
+            assert_eq!(ctx.hot, None, "a clipped-away button must not hover");
+            assert!(!probe.target_clicked);
+            click_frame(&mut ctx, hidden_point, true, |ui| {
+                declare_none_with_buttons(ui, "B9", &mut probe)
+            });
+            assert_ne!(
+                ctx.active,
+                Some(b9),
+                "a clipped-away button must not capture the press"
+            );
+            click_frame(&mut ctx, hidden_point, false, |ui| {
+                declare_none_with_buttons(ui, "B9", &mut probe)
+            });
+            assert!(!probe.target_clicked, "a clipped-away button must not fire");
+        }
+
+        struct NestedProbe {
+            outer: [f32; 4],
+            inner: [f32; 4],
+        }
+
+        fn declare_nested(ui: &mut Ui, inner_flags: ScrollFlags, probe: &mut NestedProbe) {
+            let pos = ui.ctx.current_window_mut().cursor.next_pos();
+            probe.outer = [pos[0], pos[1], pos[0] + 200.0, pos[1] + 120.0];
+            ui.child("outer", [200.0, 120.0], ScrollFlags::WHEEL, |ui| {
+                let pos = ui.ctx.current_window_mut().cursor.next_pos();
+                probe.inner = [pos[0], pos[1], pos[0] + 180.0, pos[1] + 60.0];
+                ui.child("inner", [180.0, 60.0], inner_flags, |ui| {
+                    for i in 0..10 {
+                        ui.button(&alloc::format!("I{i}"));
+                    }
+                });
+                for i in 0..10 {
+                    ui.button(&alloc::format!("O{i}"));
+                }
+            });
+        }
+
+        #[test]
+        fn wheel_over_a_non_scrollable_inner_child_falls_through_to_the_scrollable_outer() {
+            let mut ctx = super::test_context();
+            let mut probe = NestedProbe {
+                outer: [0.0; 4],
+                inner: [0.0; 4],
+            };
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_nested(ui, ScrollFlags::NONE, &mut probe)
+            });
+            let outer_id = child_id("outer");
+            let inner_id = nested_id(outer_id, "inner");
+
+            let outer_h = probe.outer[3] - probe.outer[1];
+            assert!(scroll_state_of(&ctx, outer_id).unwrap().1 > outer_h);
+
+            frame(&mut ctx, center(probe.inner), -1.0, |ui| {
+                declare_nested(ui, ScrollFlags::NONE, &mut probe)
+            });
+            let notch = super::super::WHEEL_LINES_PER_NOTCH * ctx.font.line_height();
+            let outer_offset = scroll_state_of(&ctx, outer_id).unwrap().0;
+            assert!(
+                (outer_offset - notch).abs() < 0.001,
+                "the wheel over a non-scrollable inner child must fall through to the outer: {outer_offset} != {notch}"
+            );
+            assert_eq!(
+                scroll_state_of(&ctx, inner_id).unwrap().0,
+                0.0,
+                "a non-scrollable child never scrolls"
+            );
+        }
+
+        #[test]
+        fn wheel_over_a_scrollable_inner_child_scrolls_only_the_inner() {
+            let mut ctx = super::test_context();
+            let mut probe = NestedProbe {
+                outer: [0.0; 4],
+                inner: [0.0; 4],
+            };
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_nested(ui, ScrollFlags::WHEEL, &mut probe)
+            });
+            let outer_id = child_id("outer");
+            let inner_id = nested_id(outer_id, "inner");
+
+            let outer_h = probe.outer[3] - probe.outer[1];
+            let inner_h = probe.inner[3] - probe.inner[1];
+            assert!(scroll_state_of(&ctx, outer_id).unwrap().1 > outer_h);
+            assert!(scroll_state_of(&ctx, inner_id).unwrap().1 > inner_h);
+
+            frame(&mut ctx, center(probe.inner), -1.0, |ui| {
+                declare_nested(ui, ScrollFlags::WHEEL, &mut probe)
+            });
+            let notch = super::super::WHEEL_LINES_PER_NOTCH * ctx.font.line_height();
+            let inner_offset = scroll_state_of(&ctx, inner_id).unwrap().0;
+            assert!(
+                (inner_offset - notch).abs() < 0.001,
+                "the inner child must scroll one notch: {inner_offset} != {notch}"
+            );
+            assert_eq!(
+                scroll_state_of(&ctx, outer_id).unwrap().0,
+                0.0,
+                "the outer must not co-consume the wheel when the inner is scrollable (innermost-wins)"
+            );
+        }
+
+        fn declare_flippable(ui: &mut Ui, flags: ScrollFlags) {
+            ui.child("c", SIZE, flags, |ui| {
+                for i in 0..10 {
+                    ui.button(&alloc::format!("B{i}"));
+                }
+            });
+        }
+
+        #[test]
+        fn a_runtime_flip_from_none_to_wheel_scrolls_on_the_first_wheel_frame() {
+            let mut ctx = super::test_context();
+            let id = child_id("c");
+
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_flippable(ui, ScrollFlags::NONE)
+            });
+            frame(&mut ctx, AWAY, -1.0, |ui| {
+                declare_flippable(ui, ScrollFlags::NONE)
+            });
+            let (offset, content_height) = scroll_state_of(&ctx, id).unwrap();
+            assert_eq!(offset, 0.0, "NONE must never scroll, even with wheel input");
+            assert!(
+                content_height > SIZE[1],
+                "content must already overflow the child by the time it flips"
+            );
+
+            let origin = super::content_origin(&ctx);
+            let child_rect = [
+                origin[0],
+                origin[1],
+                origin[0] + SIZE[0],
+                origin[1] + SIZE[1],
+            ];
+            frame(&mut ctx, center(child_rect), -1.0, |ui| {
+                declare_flippable(ui, ScrollFlags::WHEEL)
+            });
+            let notch = super::super::WHEEL_LINES_PER_NOTCH * ctx.font.line_height();
+            let (offset_after, _) = scroll_state_of(&ctx, id).unwrap();
+            assert!(
+                (offset_after - notch).abs() < 0.001,
+                "the first WHEEL frame's wheel input must scroll: {offset_after} != {notch}"
+            );
+        }
+
+        fn declare_parkable(ui: &mut Ui, flags: ScrollFlags, first_row_y: &mut f32) {
+            ui.child("c", SIZE, flags, |ui| {
+                *first_row_y = ui.ctx.current_window_mut().cursor.next_pos()[1];
+                for i in 0..10 {
+                    ui.button(&alloc::format!("B{i}"));
+                }
+            });
+        }
+
+        #[test]
+        fn a_none_frame_parks_the_childs_offset_at_the_top_without_destroying_it() {
+            let mut ctx = super::test_context();
+            let id = child_id("c");
+            let mut first_row_y = 0.0;
+
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_parkable(ui, ScrollFlags::WHEEL, &mut first_row_y)
+            });
+            let top_row_y = first_row_y;
+            let origin = super::content_origin(&ctx);
+            let child_rect = [
+                origin[0],
+                origin[1],
+                origin[0] + SIZE[0],
+                origin[1] + SIZE[1],
+            ];
+            frame(&mut ctx, center(child_rect), -1.0, |ui| {
+                declare_parkable(ui, ScrollFlags::WHEEL, &mut first_row_y)
+            });
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_parkable(ui, ScrollFlags::WHEEL, &mut first_row_y)
+            });
+            let scrolled = scroll_state_of(&ctx, id).unwrap().0;
+            assert!(scrolled > 0.0, "test premise: the child is scrolled");
+            assert!(
+                first_row_y < top_row_y,
+                "test premise: the content is laid out scrolled"
+            );
+
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_parkable(ui, ScrollFlags::NONE, &mut first_row_y)
+            });
+            assert_eq!(
+                first_row_y, top_row_y,
+                "a NONE child lays its content out top-aligned whatever the stored offset"
+            );
+            let (parked, content_height) = scroll_state_of(&ctx, id).unwrap();
+            assert_eq!(
+                parked, scrolled,
+                "a NONE frame must not overwrite the child's persisted offset"
+            );
+            assert!(
+                content_height > SIZE[1],
+                "a NONE frame must still measure and persist the content height"
+            );
+
+            frame(&mut ctx, AWAY, 0.0, |ui| {
+                declare_parkable(ui, ScrollFlags::WHEEL, &mut first_row_y)
+            });
+            assert_eq!(
+                scroll_state_of(&ctx, id).unwrap().0,
+                scrolled,
+                "flipping back to WHEEL must resume at the original offset"
+            );
+            assert!(
+                first_row_y < top_row_y,
+                "and lay the content back out scrolled"
+            );
+        }
+    }
+
+    mod window_scroll {
+        use super::test_context;
+        use crate::context::{Context, WidgetState};
+        use crate::id::{Id, IdStack};
+        use crate::input::InputState;
+        use crate::scroll::ScrollFlags;
+        use crate::ui::Ui;
+        use alloc::vec::Vec;
+
+        const AWAY: [f32; 2] = [-1000.0, -1000.0];
+        const OVERFLOW_ROWS: usize = 60;
+        const CHILD_SIZE: [f32; 2] = [200.0, 60.0];
+        const LONG_ITEMS: [&str; 6] = ["red", "green", "blue", "cyan", "magenta", "yellow"];
+
+        fn rows(ui: &mut Ui, n: usize) {
+            for _ in 0..n {
+                ui.label("row");
+            }
+        }
+
+        fn declare(ui: &mut Ui, flags: ScrollFlags, n: usize) {
+            ui.window("W", flags, |ui| rows(ui, n));
+        }
+
+        fn window_index(ctx: &Context, title: &str) -> usize {
+            ctx.windows
+                .iter()
+                .position(|w| w.title == title)
+                .expect("the window must be registered")
+        }
+
+        fn offset_of(ctx: &Context, title: &str) -> f32 {
+            ctx.windows[window_index(ctx, title)].scroll_offset
+        }
+
+        fn content_height_of(ctx: &Context, title: &str) -> f32 {
+            ctx.windows[window_index(ctx, title)].content_height
+        }
+
+        fn window_rect(ctx: &Context, title: &str) -> [f32; 4] {
+            ctx.windows[window_index(ctx, title)].rect()
+        }
+
+        fn body_rect(ctx: &Context, title: &str) -> [f32; 4] {
+            let r = window_rect(ctx, title);
+            [r[0], r[1] + super::title_bar_height(ctx), r[2], r[3]]
+        }
+
+        fn center(rect: [f32; 4]) -> [f32; 2] {
+            [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0]
+        }
+
+        fn child_id(label: &str) -> Id {
+            let mut stack = IdStack::new();
+            stack.push("W");
+            stack.id(label)
+        }
+
+        fn child_scroll_state(ctx: &Context, id: Id) -> Option<(f32, f32)> {
+            match ctx.widget_states.get(&id) {
+                Some(WidgetState::Scroll {
+                    offset,
+                    content_height,
+                }) => Some((*offset, *content_height)),
+                _ => None,
+            }
+        }
+
+        #[test]
+        fn window_none_draw_data_pin_matches_pre_scroll_snapshot() {
+            fn declare_pin_fixture(ui: &mut Ui) {
+                assert!(ui.begin_window("W", ScrollFlags::NONE));
+                ui.label("x");
+                let _ = ui.button("go");
+                ui.end_window();
+            }
+
+            let mut ctx = test_context();
+            let _settle = super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare_pin_fixture);
+            let (verts, indices, cmds) =
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare_pin_fixture);
+
+            assert_eq!(verts.len(), 175, "vertex count pin");
+            assert_eq!(indices.len(), 261, "index count pin");
+            assert_eq!(cmds.len(), 12, "command count pin");
+
+            use crate::draw::{DrawCmd, DrawVert, TextureId};
+            let expected_verts: Vec<DrawVert> = std::vec![
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E60000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x43E60000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x43E60000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E60000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E60000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E60000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x43E40000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [16, 16, 20, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC0000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC0000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF40000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF40000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42700000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B20000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42800000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42800000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B40000), f32::from_bits(0x42AD4000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42700000), f32::from_bits(0x42AD4000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [27, 27, 34, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x4285B400)],
+                    uv: [f32::from_bits(0x3DC00000), f32::from_bits(0x3E800000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42AC0000), f32::from_bits(0x4285B400)],
+                    uv: [f32::from_bits(0x3E200000), f32::from_bits(0x3E800000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42AC0000), f32::from_bits(0x429DB400)],
+                    uv: [f32::from_bits(0x3E200000), f32::from_bits(0x3E980000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x429DB400)],
+                    uv: [f32::from_bits(0x3DC00000), f32::from_bits(0x3E980000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x4282B505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42A3F505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x42A28AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42814AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x4282B505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42A3F505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B0D5D8), f32::from_bits(0x42A5E8A2)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A885D8), f32::from_bits(0x4284A8A2)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x42A28AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42814AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A9DA28), f32::from_bits(0x427EAEBC)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B22A28), f32::from_bits(0x42A0975E)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42A3F505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x4282B505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42814AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x42A28AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A95D41), f32::from_bits(0x42A3F505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B1AD41), f32::from_bits(0x4282B505)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B22A28), f32::from_bits(0x4284A8A2)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A9DA28), f32::from_bits(0x42A5E8A2)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B152BF), f32::from_bits(0x42814AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A902BF), f32::from_bits(0x42A28AFB)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43A885D8), f32::from_bits(0x42A0975E)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B0D5D8), f32::from_bits(0x427EAEBC)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42CCF400)],
+                    uv: [f32::from_bits(0x3EAE0000), f32::from_bits(0x3EC60000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x429E0000), f32::from_bits(0x42CCF400)],
+                    uv: [f32::from_bits(0x3EC00000), f32::from_bits(0x3EC60000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x429E0000), f32::from_bits(0x42DEF400)],
+                    uv: [f32::from_bits(0x3EC00000), f32::from_bits(0x3ED80000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42DEF400)],
+                    uv: [f32::from_bits(0x3EAE0000), f32::from_bits(0x3ED80000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC8000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC8000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF48000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF48000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3DD07000), f32::from_bits(0x3EEC8000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3DB07000), f32::from_bits(0x3EEC8000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3DB07000), f32::from_bits(0x3EF48000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3DD07000), f32::from_bits(0x3EF48000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EF44000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EF44000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3DD00000), f32::from_bits(0x3EEC4000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3DB00000), f32::from_bits(0x3EEC4000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3DD07000), f32::from_bits(0x3EF44000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3DB07000), f32::from_bits(0x3EF44000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3DB07000), f32::from_bits(0x3EEC4000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3DD07000), f32::from_bits(0x3EEC4000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [41, 74, 122, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EEC8000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EEC8000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EF48000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EF48000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3E043800), f32::from_bits(0x3EEC8000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x3DE87000), f32::from_bits(0x3EEC8000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3DE87000), f32::from_bits(0x3EF48000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x3E043800), f32::from_bits(0x3EF48000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EF44000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EF44000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3E040000), f32::from_bits(0x3EEC4000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3DE80000), f32::from_bits(0x3EEC4000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3E043800), f32::from_bits(0x3EF44000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x3DE87000), f32::from_bits(0x3EF44000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3DE87000), f32::from_bits(0x3EEC4000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x3E043800), f32::from_bits(0x3EEC4000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42EE8000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x42F08000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x42F08000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x4310E000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x4310E000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C3E400), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42940000), f32::from_bits(0x4311E000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428E0000), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428E0000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x428C0000), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C9E400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x42F68000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42CBE400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42C9E400), f32::from_bits(0x430DE000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [81, 114, 162, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42980000), f32::from_bits(0x43011A00)],
+                    uv: [f32::from_bits(0x3E640000), f32::from_bits(0x3EA20000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42AA0000), f32::from_bits(0x43011A00)],
+                    uv: [f32::from_bits(0x3E840000), f32::from_bits(0x3EA20000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42AA0000), f32::from_bits(0x430E1A00)],
+                    uv: [f32::from_bits(0x3E840000), f32::from_bits(0x3EBC0000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42980000), f32::from_bits(0x430E1A00)],
+                    uv: [f32::from_bits(0x3E640000), f32::from_bits(0x3EBC0000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42AC5000), f32::from_bits(0x43011A00)],
+                    uv: [f32::from_bits(0x3B800000), f32::from_bits(0x3EC60000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42BE5000), f32::from_bits(0x43011A00)],
+                    uv: [f32::from_bits(0x3D200000), f32::from_bits(0x3EC60000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42BE5000), f32::from_bits(0x430B1A00)],
+                    uv: [f32::from_bits(0x3D200000), f32::from_bits(0x3EDA0000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x42AC5000), f32::from_bits(0x430B1A00)],
+                    uv: [f32::from_bits(0x3B800000), f32::from_bits(0x3EDA0000)],
+                    col: [240, 240, 240, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43DE0000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43E56A0A)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43AC0000), f32::from_bits(0x43E56A0A)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43E56A0A)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43DE0000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B3ADA3), f32::from_bits(0x43DD5CCE)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B3E6F1), f32::from_bits(0x43E5E6F1)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43AC0000), f32::from_bits(0x43E56A0A)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43E56A0A)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B3E6F1), f32::from_bits(0x43E5E6F1)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43AB5CCE), f32::from_bits(0x43E5ADA3)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B36A0A), f32::from_bits(0x43DE0000)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43AC0000), f32::from_bits(0x43E56A0A)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 255]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43AB5CCE), f32::from_bits(0x43E5ADA3)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+                DrawVert {
+                    pos: [f32::from_bits(0x43B3ADA3), f32::from_bits(0x43DD5CCE)],
+                    uv: [f32::from_bits(0x00000000), f32::from_bits(0x00000000)],
+                    col: [224, 224, 224, 0]
+                },
+            ];
+            let expected_indices: Vec<u32> = std::vec![
+                0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15,
+                16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23, 24, 25, 26, 24, 26, 27, 28, 29, 30,
+                28, 30, 31, 32, 33, 34, 32, 34, 35, 36, 37, 38, 36, 38, 39, 40, 41, 42, 40, 42, 43,
+                44, 45, 46, 44, 46, 47, 48, 49, 50, 48, 50, 51, 52, 53, 54, 52, 54, 55, 56, 57, 58,
+                56, 58, 59, 60, 61, 62, 60, 62, 63, 64, 65, 66, 64, 66, 67, 68, 69, 70, 68, 70, 71,
+                72, 73, 74, 72, 74, 75, 76, 77, 78, 76, 78, 79, 80, 81, 82, 80, 82, 83, 84, 85, 86,
+                84, 86, 87, 88, 89, 90, 88, 90, 91, 92, 93, 94, 92, 94, 95, 96, 97, 98, 96, 98, 99,
+                100, 101, 102, 100, 102, 103, 104, 105, 106, 104, 106, 107, 108, 109, 110, 108,
+                110, 111, 112, 113, 114, 112, 114, 115, 116, 117, 118, 116, 118, 119, 120, 121,
+                122, 120, 122, 123, 124, 125, 126, 124, 126, 127, 128, 129, 130, 128, 130, 131,
+                132, 133, 134, 132, 134, 135, 136, 137, 138, 136, 138, 139, 140, 141, 142, 140,
+                142, 143, 144, 145, 146, 144, 146, 147, 148, 149, 150, 148, 150, 151, 152, 153,
+                154, 152, 154, 155, 156, 157, 158, 156, 158, 159, 160, 161, 162, 163, 164, 165,
+                163, 165, 166, 167, 168, 169, 167, 169, 170, 171, 172, 173, 171, 173, 174,
+            ];
+            let expected_cmds: Vec<DrawCmd> = std::vec![
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 24,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(0)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 30,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(1)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 12,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(0)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 12,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(1)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 6,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(0)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 36,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(1)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 30,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(0)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 30,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(1)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 24,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(0)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 24,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(1)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 12,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(0)
+                },
+                DrawCmd {
+                    effects: 0,
+                    elem_count: 21,
+                    clip_rect: [
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x42700000),
+                        f32::from_bits(0x43B40000),
+                        f32::from_bits(0x43E60000)
+                    ],
+                    texture: TextureId(1)
+                },
+            ];
+            assert_eq!(verts, expected_verts, "vertex data pin");
+            assert_eq!(indices, expected_indices, "index data pin");
+            assert_eq!(cmds, expected_cmds, "command data pin");
+        }
+
+        #[test]
+        fn a_none_window_registers_nothing_and_does_not_move_under_the_wheel() {
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::NONE, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            let over = center(body);
+            let mut frames = Vec::new();
+            for _ in 0..3 {
+                frames.push(super::scripted_frame(&mut ctx, over, false, -1.0, |ui| {
+                    declare(ui, ScrollFlags::NONE, OVERFLOW_ROWS)
+                }));
+            }
+            assert_eq!(offset_of(&ctx, "W"), 0.0, "a NONE window never scrolls");
+            assert_eq!(
+                frames[0], frames[2],
+                "a NONE window's emission must not move under the wheel"
+            );
+            assert!(
+                ctx.scroll_containers.is_empty(),
+                "a NONE window must register no wheel-routing entry"
+            );
+            assert!(
+                ctx.interaction_clip.is_none(),
+                "a NONE window must leave the interaction clip untouched"
+            );
+        }
+
+        #[test]
+        fn wheel_over_the_body_scrolls_it_while_the_title_bar_stays_put() {
+            let mut ctx = test_context();
+            let settled = super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                0.0,
+                "the first declaration cannot scroll: the content height is unknown"
+            );
+            assert!(
+                content_height_of(&ctx, "W") > body[3] - body[1],
+                "test premise: the content must overflow the body"
+            );
+
+            let over = center(body);
+            super::scripted_frame(&mut ctx, over, false, -1.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert!(
+                offset_of(&ctx, "W") > 0.0,
+                "the wheel must scroll the window body"
+            );
+            let scrolled = super::scripted_frame(&mut ctx, over, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+
+            let content_col = ctx.style.text;
+            let band = |frame: &(
+                Vec<crate::draw::DrawVert>,
+                Vec<u32>,
+                Vec<crate::draw::DrawCmd>,
+            )| {
+                frame
+                    .0
+                    .iter()
+                    .filter(|v| v.pos[1] <= body[1] && v.col != content_col)
+                    .map(|v| v.pos)
+                    .collect::<Vec<[f32; 2]>>()
+            };
+            assert!(
+                !band(&settled).is_empty(),
+                "test premise: the title bar emits"
+            );
+            assert_eq!(
+                band(&settled),
+                band(&scrolled),
+                "the title bar, its text and the close glyph must not move when the body scrolls"
+            );
+        }
+
+        #[test]
+        fn a_scrollable_windows_content_carries_the_body_clip_not_the_window_clip() {
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            let over = center(body);
+            super::scripted_frame(&mut ctx, over, false, -2.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert!(
+                offset_of(&ctx, "W") > 0.0,
+                "test premise: the body scrolled"
+            );
+            super::scripted_frame(&mut ctx, over, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+
+            let rect = window_rect(&ctx, "W");
+            let index = window_index(&ctx, "W");
+            let data = ctx.windows[index].draw_list.as_draw_data();
+            let mut saw_body_clip = false;
+            for cmd in data.commands {
+                if cmd.clip_rect == body {
+                    saw_body_clip = true;
+                } else {
+                    assert_eq!(
+                        cmd.clip_rect, rect,
+                        "a scrollable window's commands carry either the body clip \
+                         (content) or the full window rect (chrome and grip)"
+                    );
+                }
+            }
+            assert!(
+                saw_body_clip,
+                "the scrollable window must clip its content to the body rect"
+            );
+
+            assert!(
+                data.vertices
+                    .iter()
+                    .any(|v| v.pos[1] < body[1] - 1.0 && v.col == ctx.style.text),
+                "scrolled-away rows must still emit, above the body, under the body clip"
+            );
+        }
+
+        #[test]
+        fn a_widget_scrolled_above_the_body_is_not_hoverable() {
+            fn declare_with_button(ui: &mut Ui) {
+                ui.window("W", ScrollFlags::WHEEL, |ui| {
+                    let _ = ui.button("first");
+                    rows(ui, OVERFLOW_ROWS);
+                });
+            }
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare_with_button);
+            let body = body_rect(&ctx, "W");
+            let pad = ctx.style.window_padding;
+            let row_h = ctx.font().line_height() + 2.0 * ctx.style.frame_padding[1];
+
+            let unscrolled_probe = [body[0] + pad[0] + 4.0, body[1] + pad[1] + row_h / 2.0];
+            super::scripted_frame(&mut ctx, unscrolled_probe, false, 0.0, declare_with_button);
+            assert!(
+                ctx.hot.is_some(),
+                "test premise: the first row's button hovers while it is visible"
+            );
+
+            let over = center(body);
+            super::scripted_frame(&mut ctx, over, false, -3.0, declare_with_button);
+            let offset = offset_of(&ctx, "W");
+            assert!(
+                offset > pad[1] + row_h,
+                "test premise: the button must have scrolled out"
+            );
+            let probe = [
+                body[0] + pad[0] + 4.0,
+                body[1] - offset + pad[1] + row_h / 2.0,
+            ];
+            assert!(
+                probe[1] < body[1],
+                "test premise: the probe sits above the body"
+            );
+            super::scripted_frame(&mut ctx, probe, false, 0.0, declare_with_button);
+            assert!(
+                ctx.hot.is_none(),
+                "a widget scrolled above the body must not hover"
+            );
+        }
+
+        #[test]
+        fn a_title_bar_drag_moves_the_body_clip_with_the_window() {
+            const DRAG: f32 = 40.0;
+            let declare_w = |ui: &mut Ui| declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS);
+
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare_w);
+            let body = body_rect(&ctx, "W");
+            super::scripted_frame(&mut ctx, center(body), false, -2.0, declare_w);
+            assert!(
+                offset_of(&ctx, "W") > 0.0,
+                "test premise: the body scrolled"
+            );
+
+            let before = window_rect(&ctx, "W");
+            let bar_h = super::title_bar_height(&ctx);
+            let grab = [before[0] + 20.0, before[1] + bar_h / 2.0];
+            super::scripted_frame(&mut ctx, grab, true, 0.0, declare_w);
+            super::scripted_frame(&mut ctx, [grab[0], grab[1] + DRAG], true, 0.0, declare_w);
+
+            let moved = window_rect(&ctx, "W");
+            assert!(
+                (moved[1] - before[1] - DRAG).abs() < 1e-3 && moved[0] == before[0],
+                "test premise: the drag must move the window {DRAG} px down, \
+                 {before:?} -> {moved:?}"
+            );
+            assert!(
+                offset_of(&ctx, "W") > 0.0,
+                "test premise: the window is still scrolled after the drag"
+            );
+
+            let moved_body = [moved[0], moved[1] + bar_h, moved[2], moved[3]];
+            let stale_body = [before[0], before[1] + bar_h, before[2], before[3]];
+            assert_ne!(moved_body, stale_body, "test premise: the body rect moved");
+
+            let index = window_index(&ctx, "W");
+            let data = ctx.windows[index].draw_list.as_draw_data();
+            let clips: Vec<[f32; 4]> = data.commands.iter().map(|cmd| cmd.clip_rect).collect();
+            assert!(
+                clips.contains(&moved_body),
+                "the content clip must be the POST-drag body rect {moved_body:?}, \
+                 got {clips:?}"
+            );
+            assert!(
+                !clips.contains(&stale_body),
+                "no command may carry the PRE-drag body rect {stale_body:?}"
+            );
+            for clip in &clips {
+                assert!(
+                    *clip == moved_body || *clip == moved,
+                    "every clip is the moved body or the moved window rect, got {clip:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn the_offset_clamps_to_zero_and_to_the_content_overflow() {
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            let over = center(body);
+
+            super::scripted_frame(&mut ctx, over, false, 5.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                0.0,
+                "wheeling up at the top is a no-op"
+            );
+
+            super::scripted_frame(&mut ctx, over, false, -1000.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let content_height = content_height_of(&ctx, "W");
+            let max_offset = content_height - (body[3] - body[1]);
+            assert!(max_offset > 0.0, "test premise: the content overflows");
+            assert!(
+                (offset_of(&ctx, "W") - max_offset).abs() < 1e-3,
+                "the offset must clamp at {max_offset}, got {}",
+                offset_of(&ctx, "W")
+            );
+
+            super::scripted_frame(&mut ctx, over, false, -1000.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert!(
+                (offset_of(&ctx, "W") - max_offset).abs() < 1e-3,
+                "wheeling down at the bottom is a no-op"
+            );
+
+            super::scripted_frame(&mut ctx, over, false, 1000.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert_eq!(offset_of(&ctx, "W"), 0.0, "the offset round-trips to zero");
+        }
+
+        #[test]
+        fn content_shorter_than_the_body_never_scrolls() {
+            let mut ctx = test_context();
+            for _ in 0..2 {
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                    declare(ui, ScrollFlags::WHEEL, 2)
+                });
+            }
+            let body = body_rect(&ctx, "W");
+            assert!(
+                content_height_of(&ctx, "W") < body[3] - body[1],
+                "test premise: two rows must fit the body"
+            );
+            super::scripted_frame(&mut ctx, center(body), false, -10.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, 2)
+            });
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                0.0,
+                "a body the content fits inside has nothing to scroll"
+            );
+        }
+
+        #[test]
+        fn the_first_declaration_cannot_scroll_and_the_second_can() {
+            let mut ctx = test_context();
+            let inside = [200.0, 300.0];
+            super::scripted_frame(&mut ctx, inside, false, -1.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                0.0,
+                "the very first declaration has no content height to clamp against, \
+                 so its max_offset is 0 and the notch cannot move it"
+            );
+            assert!(
+                content_height_of(&ctx, "W") > 0.0,
+                "that same declaration measures the content height for the next frame"
+            );
+            super::scripted_frame(&mut ctx, inside, false, -1.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert!(
+                offset_of(&ctx, "W") > 0.0,
+                "from the second declaration the same notch scrolls"
+            );
+        }
+
+        #[test]
+        fn the_resize_grip_marker_is_still_last_and_unclipped_when_scrolled() {
+            let mut ctx = test_context();
+            ctx.style.anti_aliasing = false;
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            let over = center(body);
+            super::scripted_frame(&mut ctx, over, false, -2.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert!(
+                offset_of(&ctx, "W") > 0.0,
+                "test premise: the body scrolled"
+            );
+            super::scripted_frame(&mut ctx, over, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+
+            let rect = window_rect(&ctx, "W");
+            let zone = [
+                rect[2] - crate::ui::RESIZE_GRIP_SIZE,
+                rect[3] - crate::ui::RESIZE_GRIP_SIZE,
+                rect[2],
+                rect[3],
+            ];
+            let index = window_index(&ctx, "W");
+            let data = ctx.windows[index].draw_list.as_draw_data();
+            let title_text = ctx.style.title_text;
+            let marker: Vec<usize> = data
+                .vertices
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| {
+                    v.col == title_text
+                        && v.pos[0] >= zone[0]
+                        && v.pos[0] <= zone[2]
+                        && v.pos[1] >= zone[1]
+                        && v.pos[1] <= zone[3]
+                })
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(marker.len(), 3, "the marker must be one triangle");
+            assert_eq!(
+                *marker.last().unwrap(),
+                data.vertices.len() - 1,
+                "the marker must remain the window's LAST geometry at a non-zero offset"
+            );
+            let last_cmd = data.commands.last().expect("the window emits commands");
+            assert_eq!(
+                last_cmd.clip_rect, rect,
+                "the grip must be emitted AFTER the body clip is popped: a scrolled \
+                 window must not clip away its own grip"
+            );
+        }
+
+        #[test]
+        fn a_window_closed_while_scrolled_reopens_at_the_same_offset() {
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            super::scripted_frame(&mut ctx, center(body), false, -2.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let scrolled = offset_of(&ctx, "W");
+            assert!(scrolled > 0.0, "test premise: the window is scrolled");
+
+            let rect = window_rect(&ctx, "W");
+            let bar_h = super::title_bar_height(&ctx);
+            let close = center([rect[2] - bar_h, rect[1], rect[2], rect[1] + bar_h]);
+            super::scripted_frame(&mut ctx, close, true, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            super::scripted_frame(&mut ctx, close, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert!(
+                !ctx.windows[window_index(&ctx, "W")].open,
+                "test premise: the close button must have closed the window"
+            );
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+
+            ctx.set_window_open("W", true);
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                scrolled,
+                "the offset lives on the Window, so a close/reopen round trip keeps it"
+            );
+        }
+
+        #[test]
+        fn a_none_frame_parks_the_offset_at_the_top_without_destroying_it() {
+            let mut ctx = test_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let body = body_rect(&ctx, "W");
+            super::scripted_frame(&mut ctx, center(body), false, -2.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            let scrolled = offset_of(&ctx, "W");
+            assert!(scrolled > 0.0, "test premise: the window is scrolled");
+
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::NONE, OVERFLOW_ROWS)
+            });
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                scrolled,
+                "a NONE frame must not overwrite the window's persisted offset"
+            );
+            let index = window_index(&ctx, "W");
+            let text = ctx.style.text;
+            assert!(
+                !ctx.windows[index]
+                    .draw_list
+                    .as_draw_data()
+                    .vertices
+                    .iter()
+                    .any(|v| v.col == text && v.pos[1] < body[1]),
+                "a NONE window lays its body out top-aligned whatever the stored offset"
+            );
+
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, OVERFLOW_ROWS)
+            });
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                scrolled,
+                "flipping back to WHEEL must resume at the original offset"
+            );
+        }
+
+        fn declare_nested(ui: &mut Ui, window_flags: ScrollFlags, child_flags: ScrollFlags) {
+            ui.window("W", window_flags, |ui| {
+                ui.child("c", CHILD_SIZE, child_flags, |ui| rows(ui, 30));
+                rows(ui, OVERFLOW_ROWS);
+            });
+        }
+
+        fn route_notch(
+            window_flags: ScrollFlags,
+            child_flags: ScrollFlags,
+            probe: impl Fn(&Context) -> [f32; 2],
+        ) -> (f32, f32) {
+            let mut ctx = test_context();
+            for _ in 0..2 {
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                    declare_nested(ui, window_flags, child_flags)
+                });
+            }
+            let at = probe(&ctx);
+            super::scripted_frame(&mut ctx, at, false, -1.0, |ui| {
+                declare_nested(ui, window_flags, child_flags)
+            });
+            let child = child_scroll_state(&ctx, child_id("c"))
+                .expect("a child persists its state whatever its flags")
+                .0;
+            (offset_of(&ctx, "W"), child)
+        }
+
+        fn over_the_child(ctx: &Context) -> [f32; 2] {
+            let origin = super::content_origin(ctx);
+            [origin[0] + 10.0, origin[1] + 10.0]
+        }
+
+        fn over_the_bare_body(ctx: &Context) -> [f32; 2] {
+            let origin = super::content_origin(ctx);
+            let body = body_rect(ctx, "W");
+            let y = origin[1] + CHILD_SIZE[1] + 20.0;
+            assert!(y < body[3], "the probe must stay inside the body");
+            [origin[0] + 10.0, y]
+        }
+
+        #[test]
+        fn routing_a_scrollable_child_beats_the_scrollable_window_containing_it() {
+            let (window, child) =
+                route_notch(ScrollFlags::WHEEL, ScrollFlags::WHEEL, over_the_child);
+            assert!(
+                child > 0.0,
+                "the innermost REGISTERED container under the mouse takes the notch"
+            );
+            assert_eq!(
+                window, 0.0,
+                "the window must NOT co-scroll when its child claimed the wheel"
+            );
+        }
+
+        #[test]
+        fn routing_the_bare_body_scrolls_the_window() {
+            let (window, child) =
+                route_notch(ScrollFlags::WHEEL, ScrollFlags::WHEEL, over_the_bare_body);
+            assert!(
+                window > 0.0,
+                "with no child under the mouse the window itself takes the notch"
+            );
+            assert_eq!(
+                child, 0.0,
+                "the child must not scroll from outside its rect"
+            );
+        }
+
+        #[test]
+        fn routing_a_non_scrollable_child_falls_through_to_the_window() {
+            let (window, child) =
+                route_notch(ScrollFlags::WHEEL, ScrollFlags::NONE, over_the_child);
+            assert!(
+                window > 0.0,
+                "a NONE child registers nothing, so the notch reaches the window"
+            );
+            assert_eq!(child, 0.0, "a NONE child's offset stays pinned at zero");
+        }
+
+        #[test]
+        fn routing_a_non_scrollable_window_with_no_scrollable_child_moves_nothing() {
+            let (window, child) = route_notch(ScrollFlags::NONE, ScrollFlags::NONE, over_the_child);
+            assert_eq!(window, 0.0, "a NONE window never scrolls");
+            assert_eq!(child, 0.0, "a NONE child never scrolls");
+        }
+
+        #[test]
+        fn routing_only_the_z_top_of_two_overlapping_scrollable_windows_scrolls() {
+            fn declare_two(ui: &mut Ui) {
+                ui.window("A", ScrollFlags::WHEEL, |ui| rows(ui, OVERFLOW_ROWS));
+                ui.window("B", ScrollFlags::WHEEL, |ui| rows(ui, OVERFLOW_ROWS));
+            }
+            let mut ctx = test_context();
+            for _ in 0..2 {
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare_two);
+            }
+            let a = body_rect(&ctx, "A");
+            let b = body_rect(&ctx, "B");
+            let at = center(b);
+            assert!(
+                at[0] > a[0] && at[0] < a[2] && at[1] > a[1] && at[1] < a[3],
+                "test premise: the probe must lie inside BOTH bodies"
+            );
+            assert_eq!(
+                ctx.windows.last().map(|w| w.title.as_str()),
+                Some("B"),
+                "test premise: B is the z-top window"
+            );
+            super::scripted_frame(&mut ctx, at, false, -1.0, declare_two);
+            assert!(
+                offset_of(&ctx, "B") > 0.0,
+                "the z-top window takes the notch"
+            );
+            assert_eq!(
+                offset_of(&ctx, "A"),
+                0.0,
+                "the window BEHIND registered a false layer gate and must not scroll"
+            );
+        }
+
+        #[test]
+        fn routing_an_open_combo_popups_list_beats_the_scrollable_window_under_it() {
+            fn declare_combo_window(ui: &mut Ui, selected: &mut usize) {
+                ui.window("W", ScrollFlags::WHEEL, |ui| {
+                    ui.combo("Color", &LONG_ITEMS, selected);
+                    rows(ui, OVERFLOW_ROWS);
+                });
+            }
+            fn combo_frame(
+                ctx: &mut Context,
+                mouse: [f32; 2],
+                down: bool,
+                wheel: f32,
+                viewport: [f32; 2],
+                selected: &mut usize,
+            ) {
+                ctx.set_input(InputState {
+                    mouse_pos: mouse,
+                    mouse_down: [down, false, false, false, false],
+                    mouse_wheel: wheel,
+                    keys: &[],
+                    viewport_size: viewport,
+                });
+                ctx.new_frame(0.016);
+                {
+                    let mut ui = ctx.ui();
+                    declare_combo_window(&mut ui, selected);
+                }
+                ctx.render();
+            }
+            fn list_region_id() -> Id {
+                let mut stack = IdStack::new();
+                stack.push("W");
+                let popup = stack.id("Color");
+                stack.push_id(popup);
+                stack.id("##combo_list")
+            }
+
+            let mut ctx = test_context();
+            let mut selected = 0usize;
+            let row_h = ctx.font().line_height() + 2.0 * ctx.style.frame_padding[1];
+            let pad_y = ctx.style.window_padding[1];
+            let spacing_y = ctx.style.item_spacing[1];
+            combo_frame(&mut ctx, AWAY, false, 0.0, [0.0, 0.0], &mut selected);
+            let origin = super::content_origin(&ctx);
+            let button = [origin[0] + 4.0, origin[1] + row_h / 2.0];
+            let viewport = [
+                400.0,
+                origin[1] + row_h + 2.0 * pad_y + 2.0 * row_h + spacing_y,
+            ];
+
+            combo_frame(&mut ctx, AWAY, false, 0.0, viewport, &mut selected);
+            combo_frame(&mut ctx, button, true, 0.0, viewport, &mut selected);
+            combo_frame(&mut ctx, button, false, 0.0, viewport, &mut selected);
+            let popup = ctx
+                .popup_rect
+                .expect("the click must have opened the combo popup");
+            assert!(
+                child_scroll_state(&ctx, list_region_id()).is_some(),
+                "test premise: the clamped popup must declare a scrolling list"
+            );
+            let window_before = offset_of(&ctx, "W");
+
+            let at = center(popup);
+            let body = body_rect(&ctx, "W");
+            assert!(
+                at[0] > body[0] && at[0] < body[2] && at[1] > body[1] && at[1] < body[3],
+                "test premise: the probe must lie over the window's body too"
+            );
+            combo_frame(&mut ctx, at, false, -1.0, viewport, &mut selected);
+            let list = child_scroll_state(&ctx, list_region_id())
+                .expect("the list region persists its state")
+                .0;
+            assert!(list > 0.0, "the popup layer's list must take the notch");
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                window_before,
+                "the scrollable window under an open popup must not scroll"
+            );
+        }
+
+        #[test]
+        fn a_container_at_its_clamp_limit_consumes_the_wheel() {
+            fn declare_pair(ui: &mut Ui) {
+                declare_nested(ui, ScrollFlags::WHEEL, ScrollFlags::WHEEL)
+            }
+            let mut ctx = test_context();
+            for _ in 0..2 {
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare_pair);
+            }
+            let at = over_the_child(&ctx);
+            super::scripted_frame(&mut ctx, at, false, -1000.0, declare_pair);
+            let id = child_id("c");
+            let (pinned, content_height) =
+                child_scroll_state(&ctx, id).expect("the child persists its state");
+            let child_rect = {
+                let origin = super::content_origin(&ctx);
+                [
+                    origin[0],
+                    origin[1],
+                    origin[0] + CHILD_SIZE[0],
+                    origin[1] + CHILD_SIZE[1],
+                ]
+            };
+            let inset = crate::scroll::content_inset(&ctx.style, child_rect);
+            let max_offset = content_height - (CHILD_SIZE[1] - 2.0 * inset);
+            assert!(
+                (pinned - max_offset).abs() < 1e-3,
+                "test premise: the child must sit at its clamp limit ({pinned} vs {max_offset})"
+            );
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                0.0,
+                "test premise: the window has not scrolled"
+            );
+
+            super::scripted_frame(&mut ctx, at, false, -1.0, declare_pair);
+            assert_eq!(
+                child_scroll_state(&ctx, id).unwrap().0,
+                pinned,
+                "the exhausted child stays pinned"
+            );
+            assert_eq!(
+                offset_of(&ctx, "W"),
+                0.0,
+                "and it CONSUMES the notch: the enclosing window must not move"
+            );
+        }
+    }
+
+    mod scrollbar {
+        use crate::context::{Context, WidgetState};
+        use crate::draw::{DrawVert, WHITE_PIXEL_UV};
+        use crate::id::{Id, IdStack};
+        use crate::scroll::{ScrollFlags, MIN_SCROLLBAR_THUMB, SCROLLBAR_TAG};
+        use crate::ui::Ui;
+        use alloc::vec::Vec;
+
+        const AWAY: [f32; 2] = [-1000.0, -1000.0];
+        const SIZE: [f32; 2] = [200.0, 96.0];
+        const OVERFLOW_ROWS: usize = 20;
+        const TRACK_BG: [u8; 4] = [10, 20, 30, 255];
+        const THUMB_IDLE: [u8; 4] = [13, 23, 33, 255];
+        const THUMB_HOVERED: [u8; 4] = [11, 21, 31, 255];
+        const THUMB_ACTIVE: [u8; 4] = [12, 22, 32, 255];
+
+        fn bar_context() -> Context {
+            let mut ctx = super::test_context();
+            ctx.style.corner_rounding = 0.0;
+            ctx.style.scrollbar_bg = TRACK_BG;
+            ctx.style.scrollbar_thumb = THUMB_IDLE;
+            ctx.style.scrollbar_thumb_hovered = THUMB_HOVERED;
+            ctx.style.scrollbar_thumb_active = THUMB_ACTIVE;
+            ctx
+        }
+
+        fn rows(ui: &mut Ui, n: usize) {
+            for _ in 0..n {
+                ui.label("row");
+            }
+        }
+
+        fn declare_child(ui: &mut Ui, flags: ScrollFlags) {
+            ui.window("W", ScrollFlags::NONE, |ui| {
+                ui.child("c", SIZE, flags, |ui| rows(ui, OVERFLOW_ROWS));
+            });
+        }
+
+        fn child_id() -> Id {
+            let mut stack = IdStack::new();
+            stack.push("W");
+            stack.id("c")
+        }
+
+        fn child_bar_id() -> Id {
+            let mut stack = IdStack::new();
+            stack.push("W");
+            stack.push_id(child_id());
+            stack.id(SCROLLBAR_TAG)
+        }
+
+        fn window_bar_id() -> Id {
+            let mut stack = IdStack::new();
+            stack.push("W");
+            stack.id(SCROLLBAR_TAG)
+        }
+
+        fn scroll_state(ctx: &Context, id: Id) -> (f32, f32) {
+            match ctx.widget_states.get(&id) {
+                Some(WidgetState::Scroll {
+                    offset,
+                    content_height,
+                }) => (*offset, *content_height),
+                _ => panic!("the child must have persisted scroll state"),
+            }
+        }
+
+        fn set_offset(ctx: &mut Context, id: Id, value: f32) {
+            match ctx.widget_states.get_mut(&id) {
+                Some(WidgetState::Scroll { offset, .. }) => *offset = value,
+                _ => panic!("the child must have persisted scroll state"),
+            }
+        }
+
+        fn child_rect(ctx: &Context) -> [f32; 4] {
+            let o = super::content_origin(ctx);
+            [o[0], o[1], o[0] + SIZE[0], o[1] + SIZE[1]]
+        }
+
+        fn child_track_rect(ctx: &Context) -> [f32; 4] {
+            let r = child_rect(ctx);
+            let b = ctx.style.border_size;
+            let bar = ctx.style.scrollbar_size;
+            [r[2] - b - bar, r[1] + b, r[2] - b, r[3] - b]
+        }
+
+        fn window_track_rect(ctx: &Context) -> [f32; 4] {
+            let r = ctx.windows[0].rect();
+            let bar = ctx.style.scrollbar_size;
+            [r[2] - bar, r[1] + super::title_bar_height(ctx), r[2], r[3]]
+        }
+
+        fn center(rect: [f32; 4]) -> [f32; 2] {
+            [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0]
+        }
+
+        fn bounds_of(verts: &[DrawVert], col: [u8; 4]) -> Option<[f32; 4]> {
+            let mut found = false;
+            let mut r = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for v in verts.iter().filter(|v| v.col == col) {
+                found = true;
+                r[0] = r[0].min(v.pos[0]);
+                r[1] = r[1].min(v.pos[1]);
+                r[2] = r[2].max(v.pos[0]);
+                r[3] = r[3].max(v.pos[1]);
+            }
+            if found {
+                Some(r)
+            } else {
+                None
+            }
+        }
+
+        fn assert_close(got: f32, want: f32, what: &str) {
+            assert!(
+                (got - want).abs() < 1e-3,
+                "{what}: expected {want}, got {got}"
+            );
+        }
+
+        #[test]
+        fn bar_narrows_the_content_rect_by_scrollbar_size_and_adds_track_and_thumb() {
+            fn declare(ui: &mut Ui, flags: ScrollFlags, width: &mut f32) {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    ui.child("c", SIZE, flags, |ui| {
+                        *width = crate::widgets::available_width(ui.ctx);
+                        rows(ui, OVERFLOW_ROWS);
+                    });
+                });
+            }
+
+            let mut wheel_ctx = bar_context();
+            let mut wheel_width = 0.0;
+            super::scripted_frame(&mut wheel_ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::WHEEL, &mut wheel_width)
+            });
+            let (wheel_verts, _, _) =
+                super::scripted_frame(&mut wheel_ctx, AWAY, false, 0.0, |ui| {
+                    declare(ui, ScrollFlags::WHEEL, &mut wheel_width)
+                });
+
+            let mut bar_ctx = bar_context();
+            let mut bar_width = 0.0;
+            super::scripted_frame(&mut bar_ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::BAR, &mut bar_width)
+            });
+            let (bar_verts, _, _) = super::scripted_frame(&mut bar_ctx, AWAY, false, 0.0, |ui| {
+                declare(ui, ScrollFlags::BAR, &mut bar_width)
+            });
+
+            assert_close(
+                bar_width,
+                wheel_width - bar_ctx.style.scrollbar_size,
+                "the BAR content rect is narrower by exactly Style::scrollbar_size",
+            );
+            assert_eq!(
+                bar_verts.len(),
+                wheel_verts.len() + 8,
+                "BAR adds exactly the track quad and the thumb quad"
+            );
+        }
+
+        #[test]
+        fn thumb_spans_the_track_ends_at_the_offset_limits_and_centres_mid_range() {
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            let id = child_id();
+            let track = child_track_rect(&ctx);
+            let track_h = track[3] - track[1];
+            let (_, content_height) = scroll_state(&ctx, id);
+            let max_offset = content_height - track_h;
+            assert!(
+                max_offset > 0.0,
+                "test premise: the content must overflow ({content_height} vs {track_h})"
+            );
+
+            let at = center(track);
+            let mut thumbs = Vec::new();
+            for offset in [0.0, max_offset / 2.0, max_offset] {
+                set_offset(&mut ctx, id, offset);
+                let (verts, _, _) = super::scripted_frame(&mut ctx, at, false, 0.0, |ui| {
+                    declare_child(ui, ScrollFlags::BAR)
+                });
+                thumbs
+                    .push(bounds_of(&verts, THUMB_HOVERED).expect("the hovered thumb is emitted"));
+            }
+
+            for t in &thumbs {
+                assert_close(t[0], track[0], "thumb left");
+                assert_close(t[2], track[2], "thumb right");
+            }
+            let extent = thumbs[0][3] - thumbs[0][1];
+            assert!(
+                extent >= MIN_SCROLLBAR_THUMB && extent < track_h,
+                "a proportional thumb: {extent} in [{MIN_SCROLLBAR_THUMB}, {track_h})"
+            );
+            for t in &thumbs {
+                assert_close(t[3] - t[1], extent, "thumb extent is offset-independent");
+            }
+
+            assert_close(thumbs[0][1], track[1], "offset 0 puts the thumb at the top");
+            assert_close(
+                thumbs[2][3],
+                track[3],
+                "max_offset puts the thumb at the bottom",
+            );
+            assert_close(
+                (thumbs[1][1] + thumbs[1][3]) / 2.0,
+                (track[1] + track[3]) / 2.0,
+                "half the offset centres the thumb on the track",
+            );
+            assert!(
+                thumbs[0][1] < thumbs[1][1] && thumbs[1][1] < thumbs[2][1],
+                "the thumb advances monotonically with the offset"
+            );
+        }
+
+        #[test]
+        fn dragging_the_thumb_advances_the_offset_proportionally_and_clamps_at_both_ends() {
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            let id = child_id();
+            let track = child_track_rect(&ctx);
+            let track_h = track[3] - track[1];
+            let (_, content_height) = scroll_state(&ctx, id);
+            let max_offset = content_height - track_h;
+            assert!(max_offset > 0.0, "test premise: the content must overflow");
+
+            let hover_at = center(track);
+            let (verts, _, _) = super::scripted_frame(&mut ctx, hover_at, false, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            let thumb = bounds_of(&verts, THUMB_HOVERED).expect("the hovered thumb is emitted");
+            let extent = thumb[3] - thumb[1];
+            let travel = track_h - extent;
+            assert!(
+                travel > 0.0,
+                "test premise: the thumb must have room to move"
+            );
+
+            let grab_at = [track[0] + 2.0, thumb[1] + extent / 2.0];
+            super::scripted_frame(&mut ctx, grab_at, true, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            assert_eq!(
+                ctx.active,
+                Some(child_bar_id()),
+                "the press on the thumb captures the bar"
+            );
+            assert_eq!(
+                scroll_state(&ctx, id).0,
+                0.0,
+                "grabbing the thumb must not jump the content"
+            );
+
+            let mut dragged = 0.0;
+            for step in [8.0f32, 8.0, 8.0] {
+                dragged += step;
+                super::scripted_frame(
+                    &mut ctx,
+                    [grab_at[0], grab_at[1] + dragged],
+                    true,
+                    0.0,
+                    |ui| declare_child(ui, ScrollFlags::BAR),
+                );
+                assert_close(
+                    scroll_state(&ctx, id).0,
+                    dragged / travel * max_offset,
+                    "the offset advances proportionally with the drag",
+                );
+            }
+            assert!(
+                scroll_state(&ctx, id).0 > 0.0,
+                "sanity: the drag actually moved the content"
+            );
+
+            super::scripted_frame(
+                &mut ctx,
+                [track[0] - 400.0, track[3] + 500.0],
+                true,
+                0.0,
+                |ui| declare_child(ui, ScrollFlags::BAR),
+            );
+            assert_close(
+                scroll_state(&ctx, id).0,
+                max_offset,
+                "dragging past the bottom clamps at max_offset",
+            );
+            super::scripted_frame(
+                &mut ctx,
+                [track[2] + 400.0, track[1] - 500.0],
+                true,
+                0.0,
+                |ui| declare_child(ui, ScrollFlags::BAR),
+            );
+            assert_close(
+                scroll_state(&ctx, id).0,
+                0.0,
+                "dragging past the top clamps at 0",
+            );
+
+            super::scripted_frame(&mut ctx, hover_at, false, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            assert_eq!(ctx.active, None, "the release drops the capture");
+        }
+
+        #[test]
+        fn a_track_click_outside_the_thumb_centres_it_on_the_click() {
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            let id = child_id();
+            let track = child_track_rect(&ctx);
+            let track_h = track[3] - track[1];
+            let (_, content_height) = scroll_state(&ctx, id);
+            let max_offset = content_height - track_h;
+
+            set_offset(&mut ctx, id, max_offset / 2.0);
+            let (verts, _, _) = super::scripted_frame(&mut ctx, center(track), false, 0.0, |ui| {
+                declare_child(ui, ScrollFlags::BAR)
+            });
+            let thumb = bounds_of(&verts, THUMB_HOVERED).expect("the hovered thumb is emitted");
+            let extent = thumb[3] - thumb[1];
+
+            for target_y in [track[1] + extent / 2.0 + 2.0, track[3] - extent / 2.0 - 2.0] {
+                assert!(
+                    target_y < thumb[1] || target_y > thumb[3],
+                    "test premise: the click must land outside the thumb"
+                );
+                set_offset(&mut ctx, id, max_offset / 2.0);
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                    declare_child(ui, ScrollFlags::BAR)
+                });
+                set_offset(&mut ctx, id, max_offset / 2.0);
+                let (verts, _, _) =
+                    super::scripted_frame(&mut ctx, [track[0] + 2.0, target_y], true, 0.0, |ui| {
+                        declare_child(ui, ScrollFlags::BAR)
+                    });
+                let jumped =
+                    bounds_of(&verts, THUMB_ACTIVE).expect("the captured thumb is emitted");
+                assert_close(
+                    (jumped[1] + jumped[3]) / 2.0,
+                    target_y,
+                    "the thumb's centre lands on the click",
+                );
+                assert_close(jumped[3] - jumped[1], extent, "the extent is unchanged");
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| {
+                    declare_child(ui, ScrollFlags::BAR)
+                });
+            }
+        }
+
+        #[test]
+        fn a_child_whose_content_fits_emits_no_bar_and_releases_the_strip() {
+            fn declare(ui: &mut Ui, width: &mut f32) {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    ui.child("c", SIZE, ScrollFlags::BAR, |ui| {
+                        *width = crate::widgets::available_width(ui.ctx);
+                        ui.label("one line");
+                    });
+                });
+            }
+            let mut ctx = bar_context();
+            let mut width = 0.0;
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| declare(ui, &mut width));
+            let id = child_id();
+            let track = child_track_rect(&ctx);
+            let (_, content_height) = scroll_state(&ctx, id);
+            assert!(
+                content_height <= track[3] - track[1],
+                "test premise: the content must fit"
+            );
+
+            fn declare_wheel(ui: &mut Ui, width: &mut f32) {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    ui.child("c", SIZE, ScrollFlags::WHEEL, |ui| {
+                        *width = crate::widgets::available_width(ui.ctx);
+                        ui.label("one line");
+                    });
+                });
+            }
+            let mut wheel_ctx = bar_context();
+            let mut wheel_width = 0.0;
+            super::scripted_frame(&mut wheel_ctx, AWAY, false, 0.0, |ui| {
+                declare_wheel(ui, &mut wheel_width)
+            });
+            super::scripted_frame(&mut wheel_ctx, AWAY, false, 0.0, |ui| {
+                declare_wheel(ui, &mut wheel_width)
+            });
+
+            let at = center(track);
+            let (verts, _, _) =
+                super::scripted_frame(&mut ctx, at, false, 0.0, |ui| declare(ui, &mut width));
+            assert!(
+                bounds_of(&verts, TRACK_BG).is_none(),
+                "content that fits emits NO track geometry"
+            );
+            for col in [THUMB_IDLE, THUMB_HOVERED, THUMB_ACTIVE] {
+                assert!(
+                    bounds_of(&verts, col).is_none(),
+                    "content that fits emits NO thumb geometry ({col:?})"
+                );
+            }
+            assert_ne!(ctx.hot, Some(child_bar_id()), "no bar, nothing to hover");
+            assert_close(
+                width,
+                wheel_width,
+                "the strip is released: the content is as wide as a WHEEL child's",
+            );
+
+            super::scripted_frame(&mut ctx, at, true, 0.0, |ui| declare(ui, &mut width));
+            assert_eq!(ctx.active, None, "there is no bar to capture the press");
+            super::scripted_frame(&mut ctx, [at[0], track[3] + 200.0], true, 0.0, |ui| {
+                declare(ui, &mut width)
+            });
+            assert_eq!(ctx.active, None);
+            assert_eq!(
+                scroll_state(&ctx, id).0,
+                0.0,
+                "a culled bar never changes the offset"
+            );
+        }
+
+        #[test]
+        fn a_window_whose_content_fits_emits_no_bar() {
+            fn declare(ui: &mut Ui) {
+                ui.window("W", ScrollFlags::BAR, |ui| rows(ui, 1));
+            }
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare);
+            let track = window_track_rect(&ctx);
+            let (verts, _, _) = super::scripted_frame(&mut ctx, center(track), false, 0.0, declare);
+            assert!(
+                bounds_of(&verts, TRACK_BG).is_none(),
+                "a fitting window body emits NO track"
+            );
+            for col in [THUMB_IDLE, THUMB_HOVERED, THUMB_ACTIVE] {
+                assert!(
+                    bounds_of(&verts, col).is_none(),
+                    "a fitting window body emits NO thumb ({col:?})"
+                );
+            }
+            assert_ne!(ctx.hot, Some(window_bar_id()));
+        }
+
+        #[test]
+        fn the_same_child_gains_a_bar_only_once_its_rows_overflow() {
+            fn declare(ui: &mut Ui, n: usize) {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    ui.child("c", SIZE, ScrollFlags::BAR, |ui| rows(ui, n));
+                });
+            }
+            fn bar_emitted(rows_n: usize) -> bool {
+                let mut ctx = bar_context();
+                super::scripted_frame(&mut ctx, AWAY, false, 0.0, |ui| declare(ui, rows_n));
+                let at = center(child_track_rect(&ctx));
+                super::scripted_frame(&mut ctx, at, false, 0.0, |ui| declare(ui, rows_n));
+                let (verts, _, _) =
+                    super::scripted_frame(&mut ctx, at, false, 0.0, |ui| declare(ui, rows_n));
+                let track = bounds_of(&verts, TRACK_BG).is_some();
+                let thumb = [THUMB_IDLE, THUMB_HOVERED, THUMB_ACTIVE]
+                    .iter()
+                    .any(|c| bounds_of(&verts, *c).is_some());
+                assert_eq!(track, thumb, "track and thumb are emitted together");
+                track
+            }
+
+            let mut fitting = 0;
+            for n in 1..=OVERFLOW_ROWS {
+                if bar_emitted(n) {
+                    break;
+                }
+                fitting = n;
+            }
+            assert!(fitting >= 1, "test premise: some row count must fit");
+            assert!(!bar_emitted(fitting), "{fitting} rows fit: no bar");
+            assert!(
+                bar_emitted(fitting + 1),
+                "{} rows overflow: the bar appears",
+                fitting + 1
+            );
+            assert!(
+                bar_emitted(OVERFLOW_ROWS),
+                "and comfortably-overflowing content keeps it"
+            );
+        }
+
+        #[test]
+        fn short_track_with_overflowing_content_stays_inert_and_keeps_the_offset() {
+            const TINY_SIZE: [f32; 2] = [200.0, 12.0];
+
+            fn declare(ui: &mut Ui) {
+                ui.window("W", ScrollFlags::NONE, |ui| {
+                    ui.child("c", TINY_SIZE, ScrollFlags::BAR, |ui| {
+                        rows(ui, OVERFLOW_ROWS)
+                    });
+                });
+            }
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare);
+            let id = child_id();
+
+            let o = super::content_origin(&ctx);
+            let rect = [o[0], o[1], o[0] + TINY_SIZE[0], o[1] + TINY_SIZE[1]];
+            let b = ctx.style.border_size;
+            let bar = ctx.style.scrollbar_size;
+            let track = [rect[2] - b - bar, rect[1] + b, rect[2] - b, rect[3] - b];
+            let track_h = track[3] - track[1];
+            assert!(
+                track_h < MIN_SCROLLBAR_THUMB,
+                "test premise: the track is shorter than the minimum thumb ({track_h})"
+            );
+
+            let (_, content_height) = scroll_state(&ctx, id);
+            let max_offset = content_height - track_h;
+            assert!(
+                max_offset > 0.0,
+                "test premise: content overflows the tiny track"
+            );
+
+            set_offset(&mut ctx, id, max_offset / 2.0);
+
+            let at = center(track);
+            let (verts, _, _) = super::scripted_frame(&mut ctx, at, false, 0.0, declare);
+            assert!(
+                bounds_of(&verts, THUMB_HOVERED).is_none(),
+                "a short-track bar never hover-highlights"
+            );
+            assert_ne!(
+                ctx.hot,
+                Some(child_bar_id()),
+                "a short-track bar never sets hot"
+            );
+
+            super::scripted_frame(&mut ctx, at, true, 0.0, declare);
+            assert_eq!(ctx.active, None, "a short-track bar never captures");
+            assert_eq!(
+                scroll_state(&ctx, id).0,
+                max_offset / 2.0,
+                "a click on a short-track bar must not disturb the held offset"
+            );
+        }
+
+        #[test]
+        fn a_window_bar_sits_in_the_body_and_the_resize_grip_still_renders_last() {
+            fn declare(ui: &mut Ui) {
+                ui.window("W", ScrollFlags::BAR, |ui| rows(ui, 60));
+            }
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare);
+            let track = window_track_rect(&ctx);
+            let at = center(track);
+            let (verts, _, _) = super::scripted_frame(&mut ctx, at, false, 0.0, declare);
+
+            let thumb = bounds_of(&verts, THUMB_HOVERED).expect("the hovered thumb is emitted");
+            assert_close(thumb[0], track[0], "the thumb spans the strip");
+            assert_close(thumb[2], track[2], "the thumb spans the strip");
+            assert!(
+                thumb[1] >= track[1] && thumb[3] <= track[3],
+                "the thumb stays inside the body strip"
+            );
+            let bar_top = bounds_of(&verts, TRACK_BG).expect("the track is emitted")[1];
+            assert_close(
+                bar_top,
+                track[1],
+                "the bar starts at the body's top, below the title bar",
+            );
+
+            let grip_rgb = ctx.style.title_text;
+            let last_bar = verts
+                .iter()
+                .rposition(|v| v.col == TRACK_BG || v.col == THUMB_HOVERED)
+                .expect("the bar is emitted");
+            let last_grip = verts
+                .iter()
+                .rposition(|v| v.col[..3] == grip_rgb[..3])
+                .expect("the grip marker is emitted");
+            assert!(
+                last_grip > last_bar,
+                "the grip must remain the window's last geometry ({last_grip} vs {last_bar})"
+            );
+            assert_eq!(
+                last_grip,
+                verts.len() - 1,
+                "and nothing at all follows the grip"
+            );
+        }
+
+        #[test]
+        fn zero_corner_rounding_emits_one_crisp_quad_per_bar_part() {
+            fn declare(ui: &mut Ui) {
+                declare_child(ui, ScrollFlags::BAR)
+            }
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare);
+            let track = child_track_rect(&ctx);
+            let at = center(track);
+            let (verts, _, _) = super::scripted_frame(&mut ctx, at, false, 0.0, declare);
+
+            let thumb: Vec<&DrawVert> = verts.iter().filter(|v| v.col == THUMB_HOVERED).collect();
+            assert_eq!(thumb.len(), 4, "one crisp quad, not a 9-slice composition");
+            for v in &thumb {
+                assert_eq!(v.uv, WHITE_PIXEL_UV, "crisp chrome samples the white pixel");
+                assert!(
+                    v.pos[0] == track[0] || v.pos[0] == track[2],
+                    "the thumb spans the track's full width exactly"
+                );
+            }
+
+            let mut rounded = bar_context();
+            rounded.style.corner_rounding = 4.0;
+            super::scripted_frame(&mut rounded, AWAY, false, 0.0, declare);
+            let (rverts, _, _) = super::scripted_frame(&mut rounded, at, false, 0.0, declare);
+            let rounded_thumb = rverts.iter().filter(|v| v.col == THUMB_HOVERED).count();
+            assert!(
+                rounded_thumb > 4,
+                "rounded chrome is a 9-slice composition ({rounded_thumb} vertices)"
+            );
+        }
+
+        #[test]
+        fn wants_mouse_capture_holds_through_a_scrollbar_drag_off_the_window() {
+            fn declare(ui: &mut Ui) {
+                ui.window("W", ScrollFlags::BAR, |ui| rows(ui, 60));
+            }
+            let mut ctx = bar_context();
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare);
+            assert!(
+                !ctx.wants_mouse_capture(),
+                "test premise: an idle frame with the mouse away wants nothing"
+            );
+
+            let track = window_track_rect(&ctx);
+            let press_at = [center(track)[0], track[1] + MIN_SCROLLBAR_THUMB / 2.0];
+            super::scripted_frame(&mut ctx, press_at, true, 0.0, declare);
+            assert_eq!(ctx.active, Some(window_bar_id()), "the bar captured");
+            assert!(ctx.wants_mouse_capture());
+
+            super::scripted_frame(&mut ctx, AWAY, true, 0.0, declare);
+            assert_eq!(ctx.active, Some(window_bar_id()), "the drag survives");
+            assert!(
+                ctx.wants_mouse_capture(),
+                "a held scrollbar drag keeps the host swallowing mouse messages \
+                 even off the window"
+            );
+
+            super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare);
+            assert_eq!(ctx.active, None);
+            assert!(!ctx.wants_mouse_capture());
+        }
+
+        #[test]
+        fn bar_closure_forms_match_their_begin_end_pairs() {
+            fn closure(ui: &mut Ui) {
+                ui.window("W", ScrollFlags::BAR, |ui| {
+                    ui.child("c", SIZE, ScrollFlags::BAR, |ui| rows(ui, OVERFLOW_ROWS));
+                    rows(ui, 40);
+                });
+            }
+            fn pair(ui: &mut Ui) {
+                assert!(ui.begin_window("W", ScrollFlags::BAR));
+                let scope = ui.begin_child("c", SIZE, ScrollFlags::BAR);
+                rows(ui, OVERFLOW_ROWS);
+                ui.end_child(scope);
+                rows(ui, 40);
+                ui.end_window();
+            }
+
+            fn script(
+                declare: fn(&mut Ui),
+            ) -> Vec<(Vec<DrawVert>, Vec<u32>, Vec<crate::draw::DrawCmd>)> {
+                let mut ctx = bar_context();
+                let mut frames = Vec::new();
+                frames.push(super::scripted_frame(&mut ctx, AWAY, false, 0.0, declare));
+                let track = child_track_rect(&ctx);
+                let at = [track[0] + 2.0, track[1] + 4.0];
+                frames.push(super::scripted_frame(&mut ctx, at, true, 0.0, declare));
+                for step in [10.0f32, 20.0] {
+                    frames.push(super::scripted_frame(
+                        &mut ctx,
+                        [at[0], at[1] + step],
+                        true,
+                        0.0,
+                        declare,
+                    ));
+                }
+                frames.push(super::scripted_frame(&mut ctx, at, false, 0.0, declare));
+                frames
+            }
+
+            let closure_frames = script(closure);
+            assert_ne!(
+                closure_frames[1], closure_frames[3],
+                "sanity: the drag must have moved something"
+            );
+            assert_eq!(
+                closure_frames,
+                script(pair),
+                "the closure forms must stay byte-identical sugar over the pairs"
+            );
+        }
+    }
+
     mod rounded_chrome {
         use crate::context::Context;
         use crate::draw::{DrawData, TextureId, WHITE_PIXEL_UV};
@@ -10999,7 +17833,7 @@ mod tests {
                 ctx,
                 crate::input::InputState {
                     mouse_pos: mouse,
-                    mouse_down: [left_down, false, false],
+                    mouse_down: [left_down, false, false, false, false],
                     ..Default::default()
                 },
                 |_| {},
@@ -11329,6 +18163,7 @@ mod tests {
     }
 
     mod capture_queries {
+        use crate::scroll::ScrollFlags;
         use alloc::string::String;
 
         use super::test_context;
@@ -11358,7 +18193,7 @@ mod tests {
         fn click_at(mouse_pos: [f32; 2], left_down: bool) -> InputState<'static> {
             InputState {
                 mouse_pos,
-                mouse_down: [left_down, false, false],
+                mouse_down: [left_down, false, false, false, false],
                 ..Default::default()
             }
         }
@@ -11375,12 +18210,12 @@ mod tests {
         fn cursor_inside_a_window_wants_the_mouse_but_not_the_keyboard() {
             let mut ctx = test_context();
             frame(&mut ctx, input_at(AWAY), |ui| {
-                ui.window("W", |_| {});
+                ui.window("W", ScrollFlags::NONE, |_| {});
             });
             let win = ctx.windows[0].rect();
             let inside = [(win[0] + win[2]) / 2.0, (win[1] + win[3]) / 2.0];
             frame(&mut ctx, input_at(inside), |ui| {
-                ui.window("W", |_| {});
+                ui.window("W", ScrollFlags::NONE, |_| {});
             });
             assert!(ctx.wants_mouse_capture());
             assert!(!ctx.wants_keyboard_capture());
@@ -11390,7 +18225,7 @@ mod tests {
         fn cursor_outside_every_window_wants_no_capture() {
             let mut ctx = test_context();
             frame(&mut ctx, input_at([5000.0, 5000.0]), |ui| {
-                ui.window("W", |_| {});
+                ui.window("W", ScrollFlags::NONE, |_| {});
             });
             assert!(!ctx.wants_mouse_capture());
             assert!(!ctx.wants_keyboard_capture());
@@ -11401,13 +18236,13 @@ mod tests {
             let mut ctx = test_context();
             let mut value = 0.5_f32;
             fn declare(ui: &mut Ui, value: &mut f32) {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     ui.slider_float("##s", value, 0.0..=1.0);
                 });
             }
             let mut track = [0.0; 4];
             frame(&mut ctx, input_at(AWAY), |ui| {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     let pos = ui.ctx.current_window_mut().cursor.next_pos();
                     let width = ui.ctx.current_window_mut().cursor.available_width();
                     let h = ui.ctx.font.line_height() + 2.0 * ui.ctx.style.frame_padding[1];
@@ -11440,7 +18275,7 @@ mod tests {
             let mut selected = 0usize;
             const ITEMS: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
             fn declare(ui: &mut Ui, selected: &mut usize) {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     for _ in 0..14 {
                         ui.label("filler line");
                     }
@@ -11450,7 +18285,7 @@ mod tests {
             let mut button = [0.0; 2];
             let mut row_h = 0.0;
             frame(&mut ctx, input_at(AWAY), |ui| {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     for _ in 0..14 {
                         ui.label("filler line");
                     }
@@ -11494,13 +18329,13 @@ mod tests {
             let mut ctx = test_context();
             let mut buf = String::new();
             fn declare(ui: &mut Ui, buf: &mut String) {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     ui.text_input("##t", buf);
                 });
             }
             let mut field = [0.0; 4];
             frame(&mut ctx, input_at(AWAY), |ui| {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     let pos = ui.ctx.current_window_mut().cursor.next_pos();
                     let width = ui.ctx.current_window_mut().cursor.available_width();
                     let h = ui.ctx.font.line_height() + 2.0 * ui.ctx.style.frame_padding[1];
@@ -11527,14 +18362,14 @@ mod tests {
             let mut ctx = test_context();
             let mut binding = KeyBinding::None;
             fn declare(ui: &mut Ui, binding: &mut KeyBinding) {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     ui.keybind("##k", binding);
                 });
             }
             let mut button = [0.0; 2];
             let mut row_h = 0.0;
             frame(&mut ctx, input_at(AWAY), |ui| {
-                ui.window("W", |ui| {
+                ui.window("W", ScrollFlags::NONE, |ui| {
                     let pos = ui.ctx.current_window_mut().cursor.next_pos();
                     row_h = ui.ctx.font.line_height() + 2.0 * ui.ctx.style.frame_padding[1];
                     button = pos;
@@ -11562,20 +18397,20 @@ mod tests {
             let mut ctx = test_context();
             let mut binding = KeyBinding::None;
             fn declare(ui: &mut Ui, binding: &mut KeyBinding) {
-                ui.window("W1", |ui| {
+                ui.window("W1", ScrollFlags::NONE, |ui| {
                     ui.keybind("##k", binding);
                 });
-                ui.window("W2", |_| {});
+                ui.window("W2", ScrollFlags::NONE, |_| {});
             }
             let mut keybind_at = [0.0; 2];
             frame(&mut ctx, input_at(AWAY), |ui| {
-                ui.window("W1", |ui| {
+                ui.window("W1", ScrollFlags::NONE, |ui| {
                     let pos = ui.ctx.current_window_mut().cursor.next_pos();
                     let h = ui.ctx.font.line_height() + 2.0 * ui.ctx.style.frame_padding[1];
                     keybind_at = [pos[0] + 2.0, pos[1] + h / 2.0];
                     ui.keybind("##k", &mut binding);
                 });
-                ui.window("W2", |_| {});
+                ui.window("W2", ScrollFlags::NONE, |_| {});
             });
             let w1 = ctx.windows[0].rect();
             let w2 = ctx.windows[1].rect();

@@ -2,6 +2,7 @@ use restricted_gui::context::Context as GuiContext;
 use restricted_gui::input::{InputState, KeyEvent};
 use restricted_gui::style::Style;
 use restricted_gui::ui::Ui;
+use restricted_gui::ScrollFlags;
 use restricted_gui_d3d12::{D3d12Backend, OffscreenTarget, Queue};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
@@ -34,11 +35,14 @@ fn render_frame(
 ) -> Vec<u8> {
     ctx.set_input(input);
     ctx.new_frame(1.0 / 60.0);
-    ctx.ui().window("e2e", declare);
+    ctx.ui().window("e2e", ScrollFlags::NONE, declare);
     let (pixels, width, height) = ctx.font().atlas_pixels();
     backend
         .upload_atlas(pixels, width, height)
         .expect("atlas upload failed");
+    backend
+        .upload_color_font_atlas(ctx.font())
+        .expect("color atlas upload failed");
     let draw = ctx.render();
     target
         .clear(queue, backend.sync_mut(), [0.0, 0.0, 64.0 / 255.0, 1.0])
@@ -54,7 +58,7 @@ fn render_frame(
 fn input_at(mouse_pos: [f32; 2], left_down: bool) -> InputState<'static> {
     InputState {
         mouse_pos,
-        mouse_down: [left_down, false, false],
+        mouse_down: [left_down, false, false, false, false],
         viewport_size: [W as f32, H as f32],
         ..Default::default()
     }
@@ -181,7 +185,6 @@ fn declare_widgets<'a>(
     }
 }
 
-// Real widgets -> DrawData -> real GPU -> pixel assertions. The whole stack, no mocks, no mercy.
 #[test]
 fn window_widgets_render_style_colors_and_corner_masks() {
     let (mut backend, target, queue) = setup();
@@ -523,5 +526,55 @@ fn scripted_input_drives_checkbox_toggle_and_text_entry() {
     assert!(
         diffs >= 8,
         "typed text must render in the field, got {diffs} diff pixels"
+    );
+}
+
+#[test]
+fn color_emoji_atlas_renders_palette_colors_and_disabled_opacity() {
+    let (mut backend, target, queue) = setup();
+    let mut ctx = GuiContext::new(DEJAVU_SANS).unwrap();
+    let emoji = ctx
+        .add_font(
+            include_bytes!("../../../core/tests/assets/Noto-COLRv1.ttf"),
+            32.,
+        )
+        .unwrap();
+    ctx.set_font_fallback_chain(restricted_gui::font::FontId::DEFAULT, &[emoji])
+        .unwrap();
+    ctx.set_color_atlas_texture(Some(restricted_gui::draw::TextureId(90)))
+        .unwrap();
+    let mut shaped = restricted_gui::font::ShapedText::default();
+    let mut rect = [0.; 4];
+    let mut peak = [0u8; 2];
+    for (n, disabled) in [false, true].into_iter().enumerate() {
+        let image = render_frame(
+            &mut ctx,
+            &mut backend,
+            &target,
+            &queue,
+            input_at(AWAY, false),
+            |ui| {
+                let scope = ui.begin_disabled("color opacity", disabled);
+                rect = ui
+                    .shaped_text(&mut shaped, "😀 👩‍💻 🇬🇧 👍🏽", Default::default())
+                    .unwrap();
+                ui.end_disabled(scope);
+            },
+        );
+        let mut colored = 0;
+        for y in rect[1].max(0.) as usize..(rect[3] as usize).min(H as usize) {
+            for x in rect[0].max(0.) as usize..(rect[2] as usize).min(W as usize) {
+                let pixel = px(&image, x, y);
+                if pixel[0] > pixel[2].saturating_add(30) {
+                    colored += 1;
+                    peak[n] = peak[n].max(pixel[0]);
+                }
+            }
+        }
+        assert!(colored > 20, "colored glyph pixels missing: {colored}");
+    }
+    assert!(
+        peak[0] > 220 && peak[1] < peak[0],
+        "palette/opacity mismatch: {peak:?}"
     );
 }

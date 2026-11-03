@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 
-// FNV-1a: the hash of choice for people who read one Usenet post from 2003 and never looked back. It works. Don't ask.
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
@@ -18,33 +17,51 @@ pub struct Id(pub u64);
 
 pub(crate) struct IdStack {
     seeds: Vec<u64>,
+    pub(crate) inspector: crate::diagnostics::Inspector,
+    pub(crate) semantics: crate::accessibility::SemanticTree,
 }
 
 impl IdStack {
     pub(crate) fn new() -> Self {
         Self {
             seeds: alloc::vec![FNV_OFFSET_BASIS],
+            inspector: crate::diagnostics::Inspector::new(),
+            semantics: crate::accessibility::SemanticTree::default(),
         }
     }
 
     pub(crate) fn push(&mut self, label: &str) {
         let seed = *self.seeds.last().expect("root seed is never removed");
-        self.seeds
-            .push(fnv1a(seed, split_label(label).1.as_bytes()));
+        let id = Id(fnv1a(seed, split_label(label).1.as_bytes()));
+        self.seeds.push(id.0);
+        self.inspector.scope(id, Some(label));
+        self.semantics.scope(id, Some(label));
     }
 
     pub(crate) fn pop(&mut self) {
         assert!(self.seeds.len() > 1, "IdStack::pop without a matching push");
         self.seeds.pop();
+        self.inspector.pop();
+        self.semantics.pop();
     }
 
     pub(crate) fn push_id(&mut self, id: Id) {
         self.seeds.push(id.0);
+        self.inspector.scope(id, None);
+        self.semantics.scope(id, None);
     }
 
     pub(crate) fn id(&self, label: &str) -> Id {
         let seed = *self.seeds.last().expect("root seed is never removed");
-        Id(fnv1a(seed, split_label(label).1.as_bytes()))
+        let id = Id(fnv1a(seed, split_label(label).1.as_bytes()));
+        self.inspector.label(id, label);
+        self.semantics.label(id, label);
+        id
+    }
+
+    pub(crate) fn id_index(&self, index: usize) -> Id {
+        let seed = *self.seeds.last().expect("root seed is never removed");
+        Id(fnv1a(seed, &index.to_le_bytes()))
     }
 }
 
@@ -86,6 +103,17 @@ mod tests {
 
         assert_eq!(a.id("Button"), b.id("Button"));
         assert_ne!(IdStack::new().id("Button"), a.id("Button"));
+    }
+
+    #[test]
+    fn indexed_ids_respect_parent_scope_and_index() {
+        let mut ids = IdStack::new();
+        ids.push("first");
+        let first_zero = ids.id_index(0);
+        assert_ne!(first_zero, ids.id_index(1));
+        ids.pop();
+        ids.push("second");
+        assert_ne!(first_zero, ids.id_index(0));
     }
 
     #[test]

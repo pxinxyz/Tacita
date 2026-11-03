@@ -2,6 +2,7 @@ use restricted_gui::context::Context as GuiContext;
 use restricted_gui::draw::TextureId;
 use restricted_gui::input::InputState;
 use restricted_gui::ui::Ui;
+use restricted_gui::ScrollFlags;
 use restricted_gui_d3d12::{BackendError, D3d12Backend, OffscreenTarget, Queue};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
@@ -34,7 +35,7 @@ fn render_frame(
         ..Default::default()
     });
     ctx.new_frame(1.0 / 60.0);
-    ctx.ui().window("test", declare);
+    ctx.ui().window("test", ScrollFlags::NONE, declare);
     let (pixels, width, height) = ctx.font().atlas_pixels();
     backend
         .upload_atlas(pixels, width, height)

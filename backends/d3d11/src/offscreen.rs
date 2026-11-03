@@ -74,7 +74,6 @@ impl OffscreenTarget {
 
     pub fn readback(&self, context: &Context) -> Result<Vec<u8>, BackendError> {
         unsafe {
-            // GPU -> staging -> CPU, honoring RowPitch like the ancient texts demand. A DEFAULT texture cannot be mapped; the staging copy is the toll booth.
             context.CopyResource(&self.staging, &self.texture);
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             context

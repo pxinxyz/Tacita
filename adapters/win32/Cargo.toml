@@ -1,3 +1,10 @@
+# Win32 platform adapter for `restricted-gui` (std crate, Windows-only).
+#
+# Pure translation: raw Win32 window-message parameters (`u32`/`usize`/
+# `isize`, matching the Win32 ABI on 32- and 64-bit) go in, core
+# `InputState` comes out. No `windows`-crate dependency (any host — any
+# `windows` crate version, raw FFI, even a future C++ caller — can forward
+# its message parameters unchanged), no `unsafe`, no Win32 API calls.
 
 [package]
 name = "restricted-gui-win32"
@@ -6,4 +13,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
+# The adapter produces core InputState; the dependency arrow points
+# adapter -> core only, never the reverse.
 restricted-gui = { path = "../../core" }

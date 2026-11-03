@@ -1,4 +1,11 @@
+mod compositor;
 mod offscreen;
+mod rendering_options;
+mod timing;
+pub use compositor::{BackdropCapture, PostProcessor, RenderTexture};
+pub use restricted_gui::rendering::{
+    AlphaMode, ColorMode, DrawOptimization, RenderStats, TextureEncoding, UploadStrategy,
+};
 mod shader;
 mod texture;
 
@@ -126,10 +133,20 @@ impl std::error::Error for BackendError {
 }
 
 struct Pipeline {
+    quad_vertex: ID3D11VertexShader,
+    managed_quad_vertex: ID3D11VertexShader,
+    quad_layout: ID3D11InputLayout,
+    quad_buffer: ID3D11Buffer,
+    quad_capacity: u32,
+    premult_blend: ID3D11BlendState,
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
+    managed_vertex: ID3D11VertexShader,
+    managed_pixel: ID3D11PixelShader,
     input_layout: ID3D11InputLayout,
     constant_buffer: ID3D11Buffer,
+    effects_buffer: ID3D11Buffer,
+    stencil: compositor::Stencil,
     blend_state: ID3D11BlendState,
     rasterizer_state: ID3D11RasterizerState,
     depth_stencil_state: ID3D11DepthStencilState,
@@ -141,6 +158,16 @@ struct Pipeline {
 }
 
 pub struct D3d11Backend {
+    optimization: DrawOptimization,
+    plan: restricted_gui::rendering::CommandPlan,
+    alpha_mode: AlphaMode,
+    texture_alpha: Vec<(TextureId, AlphaMode)>,
+    color_mode: ColorMode,
+    scale_factor: f32,
+    timer: timing::GpuTimer,
+    vertex_pool: Vec<(u32, ID3D11Buffer)>,
+    index_pool: Vec<(u32, ID3D11Buffer)>,
+    stats: RenderStats,
     device: Device,
     context: Context,
     pipeline: Pipeline,
@@ -152,12 +179,28 @@ impl D3d11Backend {
         Ok(Self {
             device: device.clone(),
             context: context.clone(),
-            pipeline: create_pipeline(device)?,
+            color_mode: ColorMode::Legacy,
+            optimization: DrawOptimization::default(),
+            plan: Default::default(),
+            alpha_mode: AlphaMode::Straight,
+            texture_alpha: Vec::new(),
+            scale_factor: 1.,
+            timer: timing::GpuTimer::new(device)?,
+            vertex_pool: Vec::new(),
+            index_pool: Vec::new(),
+            stats: RenderStats {
+                allocations: 3,
+                ..Default::default()
+            },
+            pipeline: create_pipeline(
+                device,
+                shader::VERTEX_SHADER_SOURCE,
+                shader::PIXEL_SHADER_SOURCE,
+            )?,
             textures: TextureSet::new(device)?,
         })
     }
 
-    // Test/dev convenience: the backend creates its own device here. Real hosts bring their OWN device and swapchain -- borrowing the GPU, not identity-thefting it.
     pub fn create_device() -> Result<(Self, Device, Context), BackendError> {
         let (device, context) = match create_device_with(&FEATURE_LEVELS) {
             Ok(pair) => pair,
@@ -193,7 +236,70 @@ impl D3d11Backend {
         height: u32,
     ) -> Result<(), BackendError> {
         self.textures
-            .add_host_texture(&self.device, id, rgba, width, height)
+            .add_host_texture(&self.device, id, rgba, width, height)?;
+        self.texture_alpha.retain(|(key, _)| *key != id);
+        Ok(())
+    }
+
+    pub fn add_gpu_texture(
+        &mut self,
+        id: TextureId,
+        texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    ) -> Result<(), BackendError> {
+        self.textures.add_gpu_texture(&self.device, id, texture)?;
+        self.texture_alpha.retain(|(key, _)| *key != id);
+        Ok(())
+    }
+
+    pub fn set_scale_factor(&mut self, scale: f32) -> Result<(), BackendError> {
+        if !scale.is_finite() || scale <= 0. || scale > 8. {
+            return Err(BackendError::InvalidTextureData(
+                "invalid pixel density".into(),
+            ));
+        }
+        self.scale_factor = scale;
+        Ok(())
+    }
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
+    pub fn set_color_mode(&mut self, mode: ColorMode) {
+        self.color_mode = mode;
+    }
+    pub fn color_mode(&self) -> ColorMode {
+        self.color_mode
+    }
+    pub fn upload_color_font_atlas(
+        &mut self,
+        font: &restricted_gui::font::Font,
+    ) -> Result<(), BackendError> {
+        let Some(id) = font.color_atlas_texture() else {
+            return Ok(());
+        };
+        let (rgba, w, h) = font.color_atlas_pixels();
+        if rgba.is_empty() {
+            return Ok(());
+        }
+        let encoding = if self.color_mode == ColorMode::Srgb {
+            TextureEncoding::Srgb
+        } else {
+            TextureEncoding::Linear
+        };
+        self.add_host_texture_encoded(id, rgba, w, h, encoding)
+    }
+    pub fn add_host_texture_encoded(
+        &mut self,
+        id: TextureId,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        encoding: TextureEncoding,
+    ) -> Result<(), BackendError> {
+        self.textures
+            .add_host_texture_encoded(&self.device, id, rgba, width, height, encoding)?;
+        self.texture_alpha.retain(|(key, _)| *key != id);
+        Ok(())
     }
 
     pub fn render(
@@ -207,39 +313,308 @@ impl D3d11Backend {
             return Ok(());
         }
 
+        if self.optimization.enabled() {
+            self.plan
+                .prepare(draw_data, self.optimization, self.scale_factor)
+                .map_err(|e| BackendError::InvalidTextureData(format!("draw plan: {e:?}")))?;
+        }
+        let triangles = !self.optimization.enabled()
+            || self.plan.draws().iter().any(|d| {
+                matches!(
+                    d.geometry,
+                    restricted_gui::rendering::GeometryRange::Triangles { .. }
+                )
+            });
         self.ensure_buffer_capacity(
             draw_data.vertices.len() as u32,
             draw_data.indices.len() as u32,
         )?;
-        self.upload_geometry(draw_data)?;
-        self.write_projection(width, height)?;
+        if triangles {
+            self.upload_geometry(draw_data)?;
+        }
+        if self.optimization.enabled() {
+            self.upload_instances()?;
+        }
+        self.write_projection(width / self.scale_factor, height / self.scale_factor)?;
         self.bind_pipeline(target, width, height);
 
-        let mut index_offset: u32 = 0;
-        for cmd in draw_data.commands {
-            let start_index = index_offset;
-            index_offset += cmd.elem_count;
-            if cmd.elem_count == 0 {
+        self.stats.uploaded_bytes = (if triangles {
+            draw_data.vertices.len() * 20 + draw_data.indices.len() * 4
+        } else {
+            0
+        }) as u64
+            + if self.optimization.enabled() {
+                self.plan.instances().len() as u64 * 80
+            } else {
+                0
+            };
+        self.stats.draw_calls = 0;
+        self.timer.begin(&self.context);
+        let result = (|| {
+            let stencil_active = draw_data.effects.iter().any(|e| e.stencil != [0; 2]);
+            if stencil_active {
+                let view = self.pipeline.stencil.view(
+                    &self.device,
+                    [width.ceil() as u32, height.ceil() as u32],
+                    rendering_options::target_samples(target)?,
+                )?;
+                unsafe {
+                    self.context.ClearDepthStencilView(
+                        &view,
+                        windows::Win32::Graphics::Direct3D11::D3D11_CLEAR_STENCIL.0,
+                        1.,
+                        0,
+                    );
+                    self.context
+                        .OMSetRenderTargets(Some(&[Some(target.clone())]), &view);
+                }
+            }
+            let mut bound_effects = None;
+            let mut bound_mode = None;
+            'commands: for (cmd, geometry) in restricted_gui::rendering::DrawCalls::new(
+                draw_data,
+                self.optimization.enabled().then_some(&self.plan),
+            ) {
+                if cmd.elem_count == 0 {
+                    continue;
+                }
+                let Some(scissor) =
+                    scissor_rect(cmd.clip_rect.map(|v| v * self.scale_factor), width, height)
+                else {
+                    continue;
+                };
+                let Some(srv) = self.textures.srv_for(cmd.texture).cloned() else {
+                    eprintln!(
+                        "restricted-gui-d3d11: skipping draw command: host texture id {} is not \
+                     registered (register it with `add_host_texture`; backend contract §7)",
+                        cmd.texture.0
+                    );
+                    continue;
+                };
+                let effects = if cmd.effects == 0 {
+                    restricted_gui::effects::DrawEffects::default()
+                } else if let Some(value) = draw_data.effects.get(cmd.effects as usize - 1) {
+                    *value
+                } else {
+                    eprintln!("[d3d11] skipping invalid effect index {}", cmd.effects);
+                    continue;
+                };
+                if effects.stencil[0] > 8 || effects.stencil[1] > 2 {
+                    continue;
+                }
+                let mode = [
+                    effects.stencil[0],
+                    effects.stencil[1],
+                    effects.filter.overwrite,
+                ];
+                if bound_mode != Some(mode) {
+                    unsafe {
+                        let state = match effects.stencil[1] {
+                            1 => &self.pipeline.stencil.push,
+                            2 => &self.pipeline.stencil.pop,
+                            _ => &self.pipeline.stencil.test,
+                        };
+                        self.context.OMSetDepthStencilState(
+                            if stencil_active {
+                                state
+                            } else {
+                                &self.pipeline.depth_stencil_state
+                            },
+                            effects.stencil[0],
+                        );
+                        let blend = if effects.stencil[1] != 0 {
+                            &self.pipeline.stencil.stamp
+                        } else if effects.filter.overwrite != 0 {
+                            &self.pipeline.stencil.overwrite
+                        } else {
+                            if self.alpha_mode == AlphaMode::Premultiplied {
+                                &self.pipeline.premult_blend
+                            } else {
+                                &self.pipeline.blend_state
+                            }
+                        };
+                        self.context
+                            .OMSetBlendState(blend, Some(&[0.; 4]), u32::MAX);
+                    }
+                    bound_mode = Some(mode);
+                }
+                let flags = restricted_gui::rendering::alpha_flags(
+                    self.texture_alpha_mode(cmd.texture),
+                    self.alpha_mode,
+                    self.texture_alpha_mode(effects.mask_texture(3).unwrap_or(TextureId::WHITE)),
+                );
+                if bound_effects != Some((cmd.effects, flags)) {
+                    let mut masks = core::array::from_fn::<_, 4, _>(|_| None);
+                    for (i, slot) in masks.iter_mut().enumerate() {
+                        let id = effects.mask_texture(i).unwrap_or(TextureId::WHITE);
+                        let Some(view) = self.textures.srv_for(id).cloned() else {
+                            eprintln!("[d3d11] skipping unregistered mask texture {id:?}");
+                            continue 'commands;
+                        };
+                        *slot = Some(view);
+                    }
+                    self.write_effects(effects, flags)?;
+                    unsafe {
+                        self.context.PSSetConstantBuffers(
+                            1,
+                            Some(&[Some(self.pipeline.effects_buffer.clone())]),
+                        );
+                        self.context.PSSetShaderResources(1, Some(&masks));
+                    }
+                    bound_effects = Some((cmd.effects, flags));
+                }
+                unsafe {
+                    self.context.RSSetScissorRects(Some(&[scissor]));
+                    self.context.PSSetShaderResources(0, Some(&[Some(srv)]));
+                    match geometry {
+                        restricted_gui::rendering::GeometryRange::Triangles {
+                            first_index,
+                            index_count,
+                        } => {
+                            self.context.IASetInputLayout(&self.pipeline.input_layout);
+                            self.context.VSSetShader(
+                                if self.color_mode == ColorMode::Srgb {
+                                    &self.pipeline.managed_vertex
+                                } else {
+                                    &self.pipeline.vertex_shader
+                                },
+                                None,
+                            );
+                            self.context.IASetVertexBuffers(
+                                0,
+                                1,
+                                Some([Some(self.pipeline.vertex_buffer.clone())].as_ptr()),
+                                Some(&VERTEX_STRIDE),
+                                Some(&0),
+                            );
+                            self.context.DrawIndexed(index_count, first_index, 0);
+                        }
+                        restricted_gui::rendering::GeometryRange::Quads {
+                            first_instance,
+                            instance_count,
+                        } => {
+                            self.context.IASetInputLayout(&self.pipeline.quad_layout);
+                            self.context.VSSetShader(
+                                if self.color_mode == ColorMode::Srgb {
+                                    &self.pipeline.managed_quad_vertex
+                                } else {
+                                    &self.pipeline.quad_vertex
+                                },
+                                None,
+                            );
+                            self.context.IASetVertexBuffers(
+                                0,
+                                1,
+                                Some([Some(self.pipeline.quad_buffer.clone())].as_ptr()),
+                                Some(&80),
+                                Some(&0),
+                            );
+                            self.context
+                                .DrawInstanced(6, instance_count, 0, first_instance);
+                        }
+                    }
+                    self.stats.draw_calls += 1;
+                }
+            }
+            Ok(())
+        })();
+        self.timer.end(&self.context);
+        result
+    }
+
+    pub fn upload_strategy(&self) -> UploadStrategy {
+        UploadStrategy::DiscardMap
+    }
+    pub fn stats(&mut self) -> RenderStats {
+        self.timer.poll(&self.context);
+        let mut stats = self.stats;
+        stats.vertex_capacity = self.pipeline.vertex_capacity as u64;
+        stats.index_capacity = self.pipeline.index_capacity as u64;
+        stats.upload_capacity = stats.vertex_capacity * 20
+            + stats.index_capacity * 4
+            + self.pipeline.quad_capacity as u64 * 80;
+        stats.pool_entries = (self.vertex_pool.len() + self.index_pool.len()) as u64;
+        stats.pool_bytes = self
+            .vertex_pool
+            .iter()
+            .map(|(n, _)| *n as u64 * 20)
+            .chain(self.index_pool.iter().map(|(n, _)| *n as u64 * 4))
+            .sum();
+        stats.gpu_ms = self.timer.latest();
+        stats
+    }
+    pub fn reserve_geometry(&mut self, vertices: u32, indices: u32) -> Result<(), BackendError> {
+        self.ensure_buffer_capacity(vertices, indices)
+    }
+    pub fn set_geometry_capacity(
+        &mut self,
+        vertices: u32,
+        indices: u32,
+    ) -> Result<(), BackendError> {
+        if vertices == 0
+            || indices == 0
+            || vertices > 64 * 1024 * 1024 / 20
+            || indices > 64 * 1024 * 1024 / 4
+        {
+            return Err(BackendError::InvalidTextureData(
+                "geometry capacity outside 64 MiB bound".into(),
+            ));
+        }
+        for (required, current, buffer, pool, stride, bind) in [
+            (
+                vertices,
+                &mut self.pipeline.vertex_capacity,
+                &mut self.pipeline.vertex_buffer,
+                &mut self.vertex_pool,
+                20,
+                D3D11_BIND_VERTEX_BUFFER,
+            ),
+            (
+                indices,
+                &mut self.pipeline.index_capacity,
+                &mut self.pipeline.index_buffer,
+                &mut self.index_pool,
+                4,
+                D3D11_BIND_INDEX_BUFFER,
+            ),
+        ] {
+            if required == *current {
                 continue;
             }
-            let Some(scissor) = scissor_rect(cmd.clip_rect, width, height) else {
-                continue;
+            let found = pool
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.0 >= required)
+                .min_by_key(|(_, item)| item.0)
+                .map(|(i, _)| i);
+            let (capacity, replacement) = if let Some(index) = found {
+                self.stats.reuses += 1;
+                pool.swap_remove(index)
+            } else {
+                self.stats.allocations += 1;
+                (
+                    required,
+                    create_dynamic_buffer(&self.device, required * stride, bind)?,
+                )
             };
-            let Some(srv) = self.textures.srv_for(cmd.texture).cloned() else {
-                eprintln!(
-                    "restricted-gui-d3d11: skipping draw command: host texture id {} is not \
-                     registered (register it with `add_host_texture`; backend contract §7)",
-                    cmd.texture.0
-                );
-                continue;
-            };
-            unsafe {
-                self.context.RSSetScissorRects(Some(&[scissor]));
-                self.context.PSSetShaderResources(0, Some(&[Some(srv)]));
-                self.context.DrawIndexed(cmd.elem_count, start_index, 0);
+            let old = std::mem::replace(buffer, replacement);
+            let old_capacity = std::mem::replace(current, capacity);
+            if pool.len() < 4
+                && pool
+                    .iter()
+                    .map(|(n, _)| *n as u64 * stride as u64)
+                    .sum::<u64>()
+                    + old_capacity as u64 * stride as u64
+                    <= 64 * 1024 * 1024
+            {
+                pool.push((old_capacity, old));
             }
         }
         Ok(())
+    }
+    pub fn trim_geometry_pool(&mut self) {
+        self.vertex_pool.clear();
+        self.index_pool.clear();
     }
 
     fn ensure_buffer_capacity(
@@ -247,27 +622,27 @@ impl D3d11Backend {
         vertex_count: u32,
         index_count: u32,
     ) -> Result<(), BackendError> {
-        if vertex_count > self.pipeline.vertex_capacity {
-            let capacity = grow_capacity(self.pipeline.vertex_capacity, vertex_count);
-            self.pipeline.vertex_buffer = create_dynamic_buffer(
-                &self.device,
-                capacity * VERTEX_STRIDE,
-                D3D11_BIND_VERTEX_BUFFER,
-            )?;
-            self.pipeline.vertex_capacity = capacity;
+        const MAX_VERTICES: u32 = 64 * 1024 * 1024 / 20;
+        const MAX_INDICES: u32 = 64 * 1024 * 1024 / 4;
+        if vertex_count > MAX_VERTICES || index_count > MAX_INDICES {
+            return Err(BackendError::InvalidTextureData(
+                "geometry capacity outside 64 MiB bound".into(),
+            ));
         }
-        if index_count > self.pipeline.index_capacity {
-            let capacity = grow_capacity(self.pipeline.index_capacity, index_count);
-            self.pipeline.index_buffer =
-                create_dynamic_buffer(&self.device, capacity * 4, D3D11_BIND_INDEX_BUFFER)?;
-            self.pipeline.index_capacity = capacity;
+        if vertex_count > self.pipeline.vertex_capacity
+            || index_count > self.pipeline.index_capacity
+        {
+            self.set_geometry_capacity(
+                grow_capacity(self.pipeline.vertex_capacity, vertex_count).min(MAX_VERTICES),
+                grow_capacity(self.pipeline.index_capacity, index_count).min(MAX_INDICES),
+            )?;
         }
         Ok(())
     }
 
     fn upload_geometry(&self, draw_data: &DrawData) -> Result<(), BackendError> {
-        let vertex_bytes = pack_vertices(draw_data.vertices);
-        let index_bytes = pack_indices(draw_data.indices);
+        let vertex_bytes = vertex_bytes(draw_data.vertices);
+        let index_bytes = index_bytes(draw_data.indices);
         unsafe {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             self.context
@@ -342,6 +717,29 @@ impl D3d11Backend {
         Ok(())
     }
 
+    fn write_effects(
+        &self,
+        effects: restricted_gui::effects::DrawEffects,
+        flags: u32,
+    ) -> Result<(), BackendError> {
+        let bytes = effects.uniform_bytes_with_alpha(flags);
+        unsafe {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context
+                .Map(
+                    &self.pipeline.effects_buffer,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped),
+                )
+                .map_err(BackendError::MapFailed)?;
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.pData.cast::<u8>(), bytes.len());
+            self.context.Unmap(&self.pipeline.effects_buffer, 0);
+        }
+        Ok(())
+    }
+
     fn bind_pipeline(&self, target: &ID3D11RenderTargetView, width: f32, height: f32) {
         let viewport = D3D11_VIEWPORT {
             TopLeftX: 0.0,
@@ -369,10 +767,24 @@ impl D3d11Backend {
                 .IASetIndexBuffer(&self.pipeline.index_buffer, DXGI_FORMAT_R32_UINT, 0);
             self.context
                 .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            self.context.VSSetShader(&self.pipeline.vertex_shader, None);
+            self.context.VSSetShader(
+                if self.color_mode == ColorMode::Srgb {
+                    &self.pipeline.managed_vertex
+                } else {
+                    &self.pipeline.vertex_shader
+                },
+                None,
+            );
             self.context
                 .VSSetConstantBuffers(0, Some(&[Some(self.pipeline.constant_buffer.clone())]));
-            self.context.PSSetShader(&self.pipeline.pixel_shader, None);
+            self.context.PSSetShader(
+                if self.color_mode == ColorMode::Srgb {
+                    &self.pipeline.managed_pixel
+                } else {
+                    &self.pipeline.pixel_shader
+                },
+                None,
+            );
             self.context
                 .PSSetSamplers(0, Some(&[Some(self.pipeline.sampler.clone())]));
             self.context.GSSetShader(None, None);
@@ -412,17 +824,49 @@ fn create_device_with(
     ))
 }
 
-fn create_pipeline(device: &Device) -> Result<Pipeline, BackendError> {
-    let vs_blob = shader::compile(
-        shader::VERTEX_SHADER_SOURCE,
+fn create_pipeline(
+    device: &Device,
+    vertex_source: &str,
+    pixel_source: &str,
+) -> Result<Pipeline, BackendError> {
+    let vs_blob = shader::compile(vertex_source, shader::VS_ENTRY, shader::VS_TARGET)?;
+    let ps_blob = shader::compile(pixel_source, shader::PS_ENTRY, shader::PS_TARGET)?;
+    let managed_vs = shader::compile(
+        &format!("#define GUI_MANAGED_SRGB 1\n{}", vertex_source),
         shader::VS_ENTRY,
         shader::VS_TARGET,
     )?;
-    let ps_blob = shader::compile(
-        shader::PIXEL_SHADER_SOURCE,
+    let managed_ps = shader::compile(
+        &format!("#define GUI_MANAGED_SRGB 1\n{}", pixel_source),
         shader::PS_ENTRY,
         shader::PS_TARGET,
     )?;
+    let mut managed_vertex = None;
+    let mut managed_pixel = None;
+    unsafe {
+        device.CreateVertexShader(
+            std::slice::from_raw_parts(
+                managed_vs.GetBufferPointer().cast::<u8>(),
+                managed_vs.GetBufferSize(),
+            ),
+            None,
+            Some(&mut managed_vertex),
+        )
+    }
+    .map_err(|e| BackendError::StateCreation("managed vertex shader", e))?;
+    unsafe {
+        device.CreatePixelShader(
+            std::slice::from_raw_parts(
+                managed_ps.GetBufferPointer().cast::<u8>(),
+                managed_ps.GetBufferSize(),
+            ),
+            None,
+            Some(&mut managed_pixel),
+        )
+    }
+    .map_err(|e| BackendError::StateCreation("managed pixel shader", e))?;
+    let managed_vertex = compositor::required(managed_vertex)?;
+    let managed_pixel = compositor::required(managed_pixel)?;
     let vs_bytecode = unsafe {
         std::slice::from_raw_parts(
             vs_blob.GetBufferPointer().cast::<u8>(),
@@ -467,6 +911,11 @@ fn create_pipeline(device: &Device) -> Result<Pipeline, BackendError> {
     })?;
 
     let constant_buffer = create_dynamic_buffer(device, 64, D3D11_BIND_CONSTANT_BUFFER)?;
+    let effects_buffer = create_dynamic_buffer(
+        device,
+        restricted_gui::effects::EFFECT_UNIFORM_SIZE as u32,
+        D3D11_BIND_CONSTANT_BUFFER,
+    )?;
 
     let mut blend_desc = D3D11_BLEND_DESC::default();
     blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
@@ -482,12 +931,20 @@ fn create_pipeline(device: &Device) -> Result<Pipeline, BackendError> {
     let blend_state = create_state(device, &blend_desc, "blend state", |d, desc, out| unsafe {
         d.CreateBlendState(desc, out)
     })?;
+    blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    let premult_blend = create_state(
+        device,
+        &blend_desc,
+        "premultiplied blend",
+        |d, desc, out| unsafe { d.CreateBlendState(desc, out) },
+    )?;
 
     let rasterizer_desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
         CullMode: D3D11_CULL_NONE,
         ScissorEnable: true.into(),
         DepthClipEnable: true.into(),
+        MultisampleEnable: true.into(),
         ..Default::default()
     };
     let rasterizer_state = create_state(
@@ -535,10 +992,20 @@ fn create_pipeline(device: &Device) -> Result<Pipeline, BackendError> {
         create_dynamic_buffer(device, INITIAL_INDEX_CAPACITY * 4, D3D11_BIND_INDEX_BUFFER)?;
 
     Ok(Pipeline {
+        quad_vertex: rendering_options::quad_shader(device, vertex_source, false)?,
+        managed_quad_vertex: rendering_options::quad_shader(device, vertex_source, true)?,
+        quad_layout: rendering_options::quad_layout(device, vertex_source)?,
+        quad_buffer: create_dynamic_buffer(device, 80 * 1024, D3D11_BIND_VERTEX_BUFFER)?,
+        quad_capacity: 1024,
+        premult_blend,
         vertex_shader,
         pixel_shader,
+        managed_vertex,
+        managed_pixel,
         input_layout,
         constant_buffer,
+        effects_buffer,
+        stencil: compositor::Stencil::new(device)?,
         blend_state,
         rasterizer_state,
         depth_stencil_state,
@@ -608,21 +1075,20 @@ fn scissor_rect(clip_rect: [f32; 4], width: f32, height: f32) -> Option<RECT> {
     })
 }
 
-fn pack_vertices(vertices: &[DrawVert]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(vertices.len() * VERTEX_STRIDE as usize);
-    for v in vertices {
-        for f in [v.pos[0], v.pos[1], v.uv[0], v.uv[1]] {
-            out.extend_from_slice(&f.to_ne_bytes());
-        }
-        out.extend_from_slice(&v.col);
+fn vertex_bytes(vertices: &[DrawVert]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            vertices.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(vertices),
+        )
     }
-    out
 }
 
-fn pack_indices(indices: &[u32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(indices.len() * 4);
-    for i in indices {
-        out.extend_from_slice(&i.to_ne_bytes());
+fn index_bytes(indices: &[u32]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            indices.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(indices),
+        )
     }
-    out
 }

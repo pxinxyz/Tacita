@@ -1,5 +1,4 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// 62 variants, each mapped by hand in three places (here, the FFI's u16 table, the win32 adapter). Add a 63rd and the consistency tests form a search party.
 pub enum Key {
     Backspace,
     Delete,
@@ -63,6 +62,8 @@ pub enum Key {
     Shift,
     Ctrl,
     Alt,
+    Up,
+    Down,
 }
 
 impl Key {
@@ -72,6 +73,8 @@ impl Key {
             Key::Delete => "Delete",
             Key::Left => "Left",
             Key::Right => "Right",
+            Key::Up => "Up",
+            Key::Down => "Down",
             Key::Home => "Home",
             Key::End => "End",
             Key::Enter => "Enter",
@@ -179,10 +182,9 @@ pub enum KeyEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-// Everything the host observed in one frame, fed in from the outside. The library never asks the OS anything directly -- strict need-to-know basis.
 pub struct InputState<'a> {
     pub mouse_pos: [f32; 2],
-    pub mouse_down: [bool; 3],
+    pub mouse_down: [bool; 5],
     pub mouse_wheel: f32,
     pub keys: &'a [KeyEvent],
     pub viewport_size: [f32; 2],
@@ -192,7 +194,7 @@ impl Default for InputState<'_> {
     fn default() -> Self {
         Self {
             mouse_pos: [0.0, 0.0],
-            mouse_down: [false, false, false],
+            mouse_down: [false, false, false, false, false],
             mouse_wheel: 0.0,
             keys: &[],
             viewport_size: [0.0, 0.0],
@@ -209,13 +211,13 @@ mod tests {
     fn default_input_state_is_neutral() {
         let input = InputState::default();
         assert_eq!(input.mouse_pos, [0.0, 0.0]);
-        assert_eq!(input.mouse_down, [false, false, false]);
+        assert_eq!(input.mouse_down, [false, false, false, false, false]);
         assert_eq!(input.mouse_wheel, 0.0);
         assert!(input.keys.is_empty());
         assert_eq!(input.viewport_size, [0.0, 0.0]);
     }
 
-    const ALL_KEYS: [(Key, &str); 62] = [
+    const ALL_KEYS: [(Key, &str); 64] = [
         (Key::Backspace, "Backspace"),
         (Key::Delete, "Delete"),
         (Key::Left, "Left"),
@@ -278,6 +280,8 @@ mod tests {
         (Key::Shift, "Shift"),
         (Key::Ctrl, "Ctrl"),
         (Key::Alt, "Alt"),
+        (Key::Up, "Up"),
+        (Key::Down, "Down"),
     ];
 
     #[test]

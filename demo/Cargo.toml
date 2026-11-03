@@ -1,3 +1,9 @@
+# Dev-only visual verification harness for `restricted-gui` (std crate).
+#
+# This crate is NOT part of the shipped library. It exists so developers can
+# eyeball the widget set on a real window/GPU. The `core` crate
+# (package `restricted-gui`) is `#![no_std]` and must never gain a dependency
+# on this crate or on winit/wgpu; the dependency arrow points demo -> core only.
 
 [package]
 name = "restricted-gui-demo"
@@ -7,6 +13,9 @@ publish = false
 
 [dependencies]
 restricted-gui = { path = "../core" }
+# Pinned at scaffold time (2026-07-21). Exact resolved versions (see Cargo.lock):
+#   winit 0.30.13, wgpu 30.0.0, pollster 0.4.0
 winit = "0.30"
 wgpu = "30"
 pollster = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

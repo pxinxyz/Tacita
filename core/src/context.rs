@@ -3,12 +3,33 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::draw::{DrawCmd, DrawData, DrawList, DrawVert};
-use crate::font::{Font, FontError, IconFont};
+use crate::font::{Font, FontError, FontId, IconFont};
 use crate::id::{Id, IdStack};
 use crate::input::{InputState, Key, KeyEvent, Modifiers};
 use crate::layout::Cursor;
+use crate::scroll::{ScrollContainerEntry, ScrollTarget};
 use crate::style::Style;
 use crate::ui::point_in_rect;
+
+pub(crate) struct Toast {
+    pub text: String,
+    pub remaining: f32,
+    pub duration: f32,
+}
+
+fn toast_ease(value: f32) -> f32 {
+    crate::animation::Easing::SmoothStep.sample(value)
+}
+
+fn toast_animation(remaining: f32, duration: f32) -> (f32, f32) {
+    let enter_time = 0.22_f32.min(duration * 0.4).max(f32::EPSILON);
+    let exit_time = 0.28_f32.min(duration * 0.4).max(f32::EPSILON);
+    let enter = toast_ease((duration - remaining) / enter_time);
+    let exit = toast_ease(remaining / exit_time);
+    let opacity = enter * exit;
+    let slide_x = (1.0 - enter) * 24.0 + (1.0 - exit) * 12.0;
+    (slide_x, opacity)
+}
 
 pub const DEFAULT_FONT_SIZE: f32 = 16.0;
 
@@ -28,7 +49,15 @@ pub(crate) enum PressTarget {
 }
 
 pub(crate) enum WidgetState {
+    MenuBar {
+        open: Option<Id>,
+    },
     TextInput(TextInputState),
+    TextEdit,
+    DragValue {
+        start_x: f32,
+        start_value: f64,
+    },
     Scroll {
         offset: f32,
         content_height: f32,
@@ -36,7 +65,13 @@ pub(crate) enum WidgetState {
     TabBar {
         active: usize,
     },
+    SearchCombo {
+        highlighted: usize,
+    },
     CollapsingHeader {
+        open: bool,
+    },
+    TreeNode {
         open: bool,
     },
     Keybind {
@@ -55,6 +90,8 @@ pub(crate) enum WidgetState {
 }
 
 pub(crate) struct TextInputState {
+    pub editor: Option<alloc::boxed::Box<crate::editing::TextEditor>>,
+    pub text_hash: u64,
     pub cursor: usize,
     pub scroll_x: f32,
     pub blink: f32,
@@ -63,7 +100,7 @@ pub(crate) struct TextInputState {
 #[derive(Default)]
 pub(crate) struct FrameInput {
     pub(crate) mouse_pos: [f32; 2],
-    pub(crate) mouse_down: [bool; 3],
+    pub(crate) mouse_down: [bool; 5],
     pub(crate) mouse_wheel: f32,
     pub(crate) keys: Vec<KeyEvent>,
     pub(crate) viewport_size: [f32; 2],
@@ -77,6 +114,8 @@ pub(crate) struct Window {
     pub(crate) open: bool,
     pub(crate) draw_list: DrawList,
     pub(crate) cursor: Cursor,
+    pub(crate) scroll_offset: f32,
+    pub(crate) content_height: f32,
 }
 
 impl Window {
@@ -98,6 +137,8 @@ impl Window {
             open: true,
             draw_list,
             cursor: Cursor::new(pos, size[0], [0.0; 2], [0.0; 2]),
+            scroll_offset: 0.0,
+            content_height: 0.0,
         }
     }
 
@@ -111,11 +152,23 @@ impl Window {
     }
 }
 
-pub(crate) struct ScrollRegionEntry {
-    pub(crate) id: Id,
-    pub(crate) rect: [f32; 4],
-    pub(crate) layer_owns_point: bool,
-    pub(crate) max_offset: f32,
+pub struct WindowInspection<'a> {
+    pub title: &'a str,
+    pub rect: [f32; 4],
+    pub vertices: usize,
+    pub indices: usize,
+    pub commands: &'a [DrawCmd],
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct WindowScopeState {
+    pub(crate) flags: crate::scroll::ScrollFlags,
+    pub(crate) body_rect: [f32; 4],
+    pub(crate) content_origin_y: f32,
+    pub(crate) item_spacing_y: f32,
+    pub(crate) scrollbar_rect: Option<[f32; 4]>,
+    pub(crate) saved_interaction_clip: Option<[f32; 4]>,
+    pub(crate) saved_prev_left: bool,
 }
 
 pub(crate) struct TabBarScopeState {
@@ -128,38 +181,77 @@ pub(crate) struct TabBarScopeState {
 }
 
 pub struct Context {
+    pub(crate) accessibility_actions: crate::accessibility::ActionQueue,
+    pub(crate) host_requests: crate::host_requests::HostRequests,
+    pub(crate) duplicate_ids: crate::diagnostics::duplicate_ids::DuplicateIds,
+    pub(crate) theme: Option<crate::theme::ThemeTokens>,
+    pub(crate) motion: crate::animation::MotionSettings,
+    pub(crate) animations: crate::animation::AnimationCache,
+    pub(crate) motion_frame: u64,
+    pub(crate) active_in_popup: bool,
+    pub(crate) collapse_heights: BTreeMap<Id, f32>,
+    pub(crate) focus_visuals: Vec<([f32; 4], [f32; 4], [u8; 4])>,
+    pub(crate) focus_mask_visuals: Vec<(usize, crate::effects::MaskStack)>,
+    pub(crate) focused_masks: crate::effects::MaskStack,
+    pub(crate) popup_animation: crate::animation::PopupAnimation,
+    pub(crate) routing: crate::interaction::Routing,
     pub(crate) font: Font,
+    pub(crate) font_stack: Vec<FontId>,
     pub style: Style,
     pub(crate) id_stack: IdStack,
     pub(crate) input: FrameInput,
-    // Retaining state in a stateless framework. I have become what I swore to destroy.
     pending_input: FrameInput,
-    pub(crate) prev_mouse_down: [bool; 3],
+    pub(crate) text_host: crate::editing::TextHost,
+    pub(crate) prev_mouse_down: [bool; 5],
     pub(crate) modifiers: Modifiers,
     pub(crate) hot: Option<Id>,
+    pub(crate) focused: Option<Id>,
+    pub(crate) focused_in_modal: bool,
+    pub(crate) focused_in_popup: bool,
+    pub(crate) focus_order: Vec<Id>,
+    pub(crate) focus_order_prev: Vec<Id>,
+    pub(crate) focus_rect: Option<[f32; 4]>,
+    pub(crate) focus_clip: Option<[f32; 4]>,
+    pub(crate) keyboard_activate: Option<Id>,
+    pub(crate) drag_state: Option<crate::drag_drop::DragState>,
     pub(crate) active: Option<Id>,
+    pub(crate) active_list_index: Option<usize>,
+    pub(crate) disabled_groups: Vec<Id>,
+    pub(crate) active_groups: Vec<Id>,
+    pub(crate) disabled_depth: usize,
     pub(crate) active_drag_offset: [f32; 2],
+    pub(crate) scrollbar_skin: crate::scroll::ScrollbarSkin,
     pub(crate) press_target: PressTarget,
     pub(crate) hover_top_window: Option<Id>,
     pub(crate) widget_states: BTreeMap<Id, WidgetState>,
     pub(crate) windows: Vec<Window>,
     pub(crate) overlay: DrawList,
     pub(crate) open_popup: Option<Id>,
+    pub(crate) popup_modal: bool,
+    pub(crate) popup_anchor: [f32; 2],
     pub(crate) popup_rect: Option<[f32; 4]>,
     pub(crate) overlay_cursor: Cursor,
     pub(crate) popup_scope_active: bool,
+    pub(crate) toasts: Vec<Toast>,
     pub(crate) interaction_clip: Option<[f32; 4]>,
-    pub(crate) scroll_regions: Vec<ScrollRegionEntry>,
+    pub(crate) rounded_clips: Vec<crate::shapes::ClipEntry>,
+    pub(crate) mask_depth: usize,
+    pub(crate) stencil_depth: usize,
+    pub(crate) rounded_capture_path: Vec<Id>,
+    pub(crate) focus_rounding: Vec<(usize, crate::shapes::RoundedRect)>,
+    pub(crate) focused_rounding: Vec<crate::shapes::RoundedRect>,
+    pub(crate) scroll_containers: Vec<ScrollContainerEntry>,
     pub(crate) tab_bar_scopes: Vec<TabBarScopeState>,
     pub(crate) last_item: Option<(Id, [f32; 4])>,
     pub(crate) current_window: Option<Id>,
-    pub(crate) window_scope_saved_prev_left: bool,
+    pub(crate) window_scope: Option<WindowScopeState>,
     pub(crate) dt: f32,
     created_windows: usize,
-    frame_active: bool,
+    pub(crate) frame_active: bool,
     draw_vertices: Vec<DrawVert>,
     draw_indices: Vec<u32>,
     draw_commands: Vec<DrawCmd>,
+    draw_effects: Vec<crate::effects::DrawEffects>,
 }
 
 impl Context {
@@ -177,37 +269,77 @@ impl Context {
 
     pub fn with_font(font: Font) -> Context {
         Context {
+            theme: None,
+            accessibility_actions: Default::default(),
+            host_requests: Default::default(),
+            duplicate_ids: Default::default(),
+            motion: crate::animation::MotionSettings::default(),
+            animations: BTreeMap::new(),
+            motion_frame: 0,
+            active_in_popup: false,
+            collapse_heights: BTreeMap::new(),
+            focus_visuals: Vec::new(),
+            focus_mask_visuals: Vec::new(),
+            focused_masks: Default::default(),
+            popup_animation: crate::animation::PopupAnimation::new(),
+            routing: crate::interaction::Routing::new(),
             font,
+            font_stack: Vec::with_capacity(8),
             style: Style::default(),
             id_stack: IdStack::new(),
             input: FrameInput::default(),
             pending_input: FrameInput::default(),
-            prev_mouse_down: [false; 3],
+            text_host: crate::editing::TextHost::default(),
+            prev_mouse_down: [false; 5],
             modifiers: Modifiers::default(),
             hot: None,
+            focused: None,
+            focused_in_modal: false,
+            focused_in_popup: false,
+            focus_order: Vec::new(),
+            focus_order_prev: Vec::new(),
+            focus_rect: None,
+            focus_clip: None,
+            keyboard_activate: None,
+            drag_state: None,
             active: None,
+            active_list_index: None,
+            disabled_groups: Vec::with_capacity(8),
+            active_groups: Vec::with_capacity(8),
+            disabled_depth: 0,
             active_drag_offset: [0.0; 2],
+            scrollbar_skin: crate::scroll::ScrollbarSkin::default(),
             press_target: PressTarget::None,
             hover_top_window: None,
             widget_states: BTreeMap::new(),
             windows: Vec::new(),
             overlay: DrawList::new(),
             open_popup: None,
+            popup_modal: false,
+            popup_anchor: [0.0; 2],
             popup_rect: None,
             overlay_cursor: Cursor::new([0.0; 2], 0.0, [0.0; 2], [0.0; 2]),
             popup_scope_active: false,
+            toasts: Vec::new(),
             last_item: None,
             interaction_clip: None,
-            scroll_regions: Vec::new(),
+            rounded_clips: Vec::new(),
+            mask_depth: 0,
+            stencil_depth: 0,
+            rounded_capture_path: Vec::new(),
+            focus_rounding: Vec::new(),
+            focused_rounding: Vec::new(),
+            scroll_containers: Vec::new(),
             tab_bar_scopes: Vec::new(),
             current_window: None,
-            window_scope_saved_prev_left: false,
+            window_scope: None,
             dt: 0.0,
             created_windows: 0,
             frame_active: false,
             draw_vertices: Vec::new(),
             draw_indices: Vec::new(),
             draw_commands: Vec::new(),
+            draw_effects: Vec::new(),
         }
     }
 
@@ -215,8 +347,69 @@ impl Context {
         &self.font
     }
 
+    pub fn text_raster_mode(&self) -> crate::font::TextRasterMode {
+        self.font.text_raster_mode()
+    }
+
+    pub fn set_color_atlas_texture(
+        &mut self,
+        texture: Option<crate::draw::TextureId>,
+    ) -> Result<(), crate::font::ColorFontError> {
+        assert!(
+            !self.frame_active,
+            "color font texture must change between frames"
+        );
+        let old = self.font.color_atlas_texture();
+        self.font.set_color_atlas_texture(texture)?;
+        if old != texture {
+            self.popup_animation.invalidate();
+        }
+        Ok(())
+    }
+
+    pub fn set_text_raster_mode(&mut self, mode: crate::font::TextRasterMode) {
+        assert!(
+            !self.frame_active,
+            "text raster mode must change between frames"
+        );
+        self.font.set_text_raster_mode(mode);
+    }
+
+    pub fn replace_font(&mut self, mut font: Font) {
+        assert!(!self.frame_active, "replace_font must run between frames");
+        assert_eq!(
+            font.face_count(),
+            self.font.face_count(),
+            "replacement font must preserve face IDs"
+        );
+        font.set_text_raster_mode(self.font.text_raster_mode());
+        font.set_color_atlas_texture(self.font.color_atlas_texture())
+            .expect("existing color texture ID is valid");
+        self.font = font;
+        self.popup_animation.invalidate();
+        for slot in &mut self.routing.popups {
+            slot.motion.invalidate();
+        }
+    }
+
+    pub fn add_font(&mut self, bytes: &[u8], px_size: f32) -> Result<FontId, FontError> {
+        self.font.add_face(bytes, px_size)
+    }
+
+    pub fn add_font_with_icons(
+        &mut self,
+        bytes: &[u8],
+        px_size: f32,
+        icons: &[IconFont<'_>],
+    ) -> Result<FontId, FontError> {
+        self.font.add_face_with_icons(bytes, px_size, icons)
+    }
+
+    pub fn active_font(&self) -> FontId {
+        self.font_stack.last().copied().unwrap_or(FontId::DEFAULT)
+    }
+
     pub fn set_input(&mut self, input: InputState) {
-        // Copy the host's frame into our own buffers. Borrowing across frames is how you meet the borrow checker's final boss.
         self.pending_input.mouse_pos = input.mouse_pos;
         self.pending_input.mouse_down = input.mouse_down;
         self.pending_input.mouse_wheel = input.mouse_wheel;
@@ -230,14 +423,33 @@ impl Context {
             !self.frame_active,
             "Context::new_frame called while a frame is active; call render first"
         );
+        self.id_stack.inspector.reset();
+        self.id_stack.semantics.reset();
+        self.duplicate_ids.reset();
+        self.reset_host_requests();
+        core::mem::swap(
+            &mut self.accessibility_actions.pending,
+            &mut self.accessibility_actions.current,
+        );
+        self.accessibility_actions.pending.clear();
+        self.text_host.caret = None;
         self.dt = dt;
+        self.motion_frame = self.motion_frame.wrapping_add(1);
         self.prev_mouse_down = self.input.mouse_down;
         core::mem::swap(&mut self.input, &mut self.pending_input);
         self.pending_input.keys.clear();
         self.pending_input.mouse_pos = [0.0; 2];
-        self.pending_input.mouse_down = [false; 3];
+        self.pending_input.mouse_down = [false; 5];
         self.pending_input.mouse_wheel = 0.0;
         self.pending_input.viewport_size = [0.0; 2];
+        if self.input.mouse_down != self.prev_mouse_down
+            || self.input.mouse_wheel != 0.
+            || !self.input.keys.is_empty()
+            || !self.accessibility_actions.current.is_empty()
+        {
+            self.invalidate();
+        }
+        self.routing.initial_modifiers = self.modifiers;
         for event in &self.input.keys {
             match event {
                 KeyEvent::Press(Key::Shift) => self.modifiers.shift = true,
@@ -250,8 +462,76 @@ impl Context {
             }
         }
         self.hot = None;
+        self.route_input();
+        core::mem::swap(&mut self.focus_order, &mut self.focus_order_prev);
+        self.focus_order.clear();
+        self.focus_rect = None;
+        self.focus_clip = None;
+        self.focus_visuals.clear();
+        self.focus_mask_visuals.clear();
+        self.focused_masks = Default::default();
+        self.focus_rounding.clear();
+        self.focused_rounding.clear();
+        if self.input.mouse_down[0] && !self.prev_mouse_down[0] {
+            self.focused = None;
+            self.focused_in_modal = false;
+            self.focused_in_popup = false;
+        }
+        if self
+            .input
+            .keys
+            .iter()
+            .any(|event| matches!(event, KeyEvent::Press(crate::input::Key::Tab)))
+        {
+            if self.focused.is_some() && self.active == self.focused {
+                self.clear_active();
+            }
+            let order = &self.focus_order_prev;
+            if !order.is_empty() {
+                let next = self
+                    .focused
+                    .and_then(|id| order.iter().position(|&item| item == id))
+                    .map(|index| {
+                        if self.modifiers.shift {
+                            (index + order.len() - 1) % order.len()
+                        } else {
+                            (index + 1) % order.len()
+                        }
+                    })
+                    .unwrap_or(if self.modifiers.shift {
+                        order.len() - 1
+                    } else {
+                        0
+                    });
+                self.focused = Some(order[next]);
+                self.focused_in_modal = self.popup_modal;
+                self.focused_in_popup = self.open_popup.is_some();
+            }
+        }
+        self.keyboard_activate = if (self.open_popup.is_none() || self.focused_in_popup)
+            && self.input.keys.iter().any(|event| {
+                matches!(
+                    event,
+                    KeyEvent::Press(crate::input::Key::Enter | crate::input::Key::Space)
+                )
+            }) {
+            self.focused
+        } else {
+            None
+        };
         self.last_item = None;
-        self.scroll_regions.clear();
+        self.scroll_containers.clear();
+        self.font_stack.clear();
+        self.disabled_groups.clear();
+        self.disabled_depth = 0;
+        if let Some(index) = self.routing.popups[..self.routing.count]
+            .iter()
+            .position(|slot| self.motion_frame.wrapping_sub(slot.seen) > 1)
+        {
+            while self.routing.count > index {
+                self.dismiss_popup();
+            }
+        }
         if self.open_popup.is_some() {
             let escape = self
                 .input
@@ -263,20 +543,28 @@ impl Context {
                     && !self.prev_mouse_down[0]
                     && !point_in_rect(self.input.mouse_pos, rect)
             });
-            if escape || outside_press {
-                self.open_popup = None;
-                self.popup_rect = None;
-                if outside_press {
+            if escape || (outside_press && !self.routing.popups[self.routing.count - 1].modal) {
+                let consume_press = outside_press;
+                self.dismiss_popup();
+                if escape {
+                    self.input
+                        .keys
+                        .retain(|event| !matches!(event, KeyEvent::Press(Key::Escape)));
+                }
+                if consume_press {
                     self.prev_mouse_down[0] = true;
                 }
             }
         }
+        self.route_navigation();
+        self.tick_popup_motion();
         self.press_target = PressTarget::None;
         if self.input.mouse_down[0] && !self.prev_mouse_down[0] {
             let inside_popup = self.open_popup.is_some()
-                && self
-                    .popup_rect
-                    .is_some_and(|rect| point_in_rect(self.input.mouse_pos, rect));
+                && (self.popup_modal
+                    || self
+                        .popup_rect
+                        .is_some_and(|rect| point_in_rect(self.input.mouse_pos, rect)));
             self.press_target = if inside_popup {
                 PressTarget::Popup
             } else {
@@ -284,7 +572,6 @@ impl Context {
                     .map_or(PressTarget::None, PressTarget::Window)
             };
         }
-        // Z-order hit-testing: the front-most window at the cursor wins. Implemented in M1, fixed in H1, never questioned again.
         self.hover_top_window = self.front_window_at(self.input.mouse_pos);
         self.overlay.clear();
         if self.input.viewport_size != [0.0, 0.0] {
@@ -294,6 +581,14 @@ impl Context {
                 self.input.viewport_size[0],
                 self.input.viewport_size[1],
             ]);
+        }
+        let step = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        for toast in &mut self.toasts {
+            toast.remaining -= step;
+        }
+        self.toasts.retain(|toast| toast.remaining > 0.0);
+        for index in 0..self.toasts.len() {
+            self.draw_toast(index);
         }
         for window in &mut self.windows {
             window.draw_list.clear();
@@ -310,17 +605,168 @@ impl Context {
         crate::ui::Ui { ctx: self }
     }
 
-    // One frame, one render: DrawData borrows this context, so a second render() panics. The FFI wrapper dances around that with a staging buffer and a dream.
+    pub(crate) fn push_toast(&mut self, text: &str, seconds: f32) {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return;
+        }
+        if self.toasts.len() == 6 {
+            self.toasts.remove(0);
+        }
+        self.toasts.push(Toast {
+            text: String::from(text),
+            remaining: seconds,
+            duration: seconds,
+        });
+    }
+
+    fn draw_toast(&mut self, index: usize) {
+        let toast = &self.toasts[index];
+        let face = self.active_font();
+        let style = self.style;
+        let measured = self.font.measure_in(face, &toast.text);
+        let width = measured[0] + 2.0 * style.window_padding[0];
+        let height = measured[1] + 2.0 * style.window_padding[1];
+        let viewport = self.input.viewport_size;
+        let (slide_x, opacity) = toast_animation(toast.remaining, toast.duration);
+        let fade = |mut color: [u8; 4]| {
+            color[3] = (color[3] as f32 * opacity + 0.5) as u8;
+            color
+        };
+        let base_x = if viewport[0] > 0.0 {
+            (viewport[0] - width - 16.0).max(0.0)
+        } else {
+            16.0
+        };
+        let x = base_x + slide_x;
+        let y = 56.0 + index as f32 * (height + 8.0);
+        let rect = [x, y, x + width, y + height];
+        crate::widgets::chrome_fill(
+            &mut self.font,
+            &mut self.overlay,
+            style.corner_rounding,
+            rect,
+            fade(style.window_bg),
+        );
+        if style.border_size > 0.0 {
+            crate::widgets::draw_border(
+                &mut self.font,
+                &mut self.overlay,
+                style.corner_rounding,
+                rect,
+                style.border_size,
+                fade(style.widget_bg_active),
+            );
+        }
+        self.overlay.add_text(
+            &mut self.font,
+            face,
+            [x + style.window_padding[0], y + style.window_padding[1]],
+            &toast.text,
+            fade(style.text),
+        );
+    }
+
     pub fn render(&mut self) -> DrawData<'_> {
         assert!(
             self.frame_active,
             "Context::render called without a preceding new_frame"
         );
+        assert!(
+            self.font_stack.is_empty(),
+            "Context::render called with an unbalanced font stack: every \
+             Ui::push_font must be matched by a Ui::pop_font before render"
+        );
+        assert!(
+            self.disabled_groups.is_empty(),
+            "Context::render called with an unbalanced disabled scope"
+        );
+        assert!(
+            self.rounded_clips.is_empty(),
+            "Context::render called with an unbalanced rounded clip"
+        );
+        assert_eq!(
+            self.mask_depth, 0,
+            "Context::render called with an unbalanced mask"
+        );
+        assert_eq!(
+            self.stencil_depth, 0,
+            "Context::render called with an unbalanced stencil clip"
+        );
+        assert_eq!(self.routing.depth, 0, "unbalanced popup scope");
         self.frame_active = false;
+        self.text_host.events.clear();
         self.route_wheel();
+        self.finish_host_requests();
+        self.draw_popup_exit();
+        if !self.input.mouse_down[0] && self.prev_mouse_down[0] {
+            if let Some(state) = self.drag_state.take() {
+                if self.active == Some(state.source) {
+                    self.clear_active();
+                }
+            }
+        }
+        if self.motion.active() {
+            for (index, &(rect, clip, color)) in self.focus_visuals.iter().enumerate() {
+                self.overlay.push_clip_rect(clip);
+                let previous_effects = self.overlay.effects_state();
+                if let Some((_, masks)) = self.focus_mask_visuals.iter().find(|(i, _)| *i == index)
+                {
+                    self.overlay.set_effects(crate::effects::DrawEffects {
+                        masks: *masks,
+                        ..Default::default()
+                    });
+                }
+                let rounded = self.focus_rounding.iter().any(|(i, _)| *i == index);
+                let mark = if rounded {
+                    self.overlay.paint_mark()
+                } else {
+                    [0; 2]
+                };
+                self.overlay.add_rect_outline(rect, 1.0, color, false);
+                for (_, shape) in self.focus_rounding.iter().filter(|(i, _)| *i == index) {
+                    self.overlay
+                        .clip_rounded_tail(mark, *shape, self.font.raster_scale());
+                }
+                self.overlay.pop_clip_rect();
+                self.overlay.set_effects(previous_effects);
+            }
+        } else if let (Some(id), Some(rect), Some(clip)) =
+            (self.focused, self.focus_rect, self.focus_clip)
+        {
+            if self.focus_order.contains(&id)
+                && rect[2] > rect[0]
+                && rect[3] > rect[1]
+                && clip[2] > clip[0]
+                && clip[3] > clip[1]
+                && (self.open_popup.is_none() || self.focused_in_popup)
+            {
+                self.overlay.push_clip_rect(clip);
+                let previous_effects = self.overlay.effects_state();
+                if self.focused_masks.count > 0 {
+                    self.overlay.set_effects(crate::effects::DrawEffects {
+                        masks: self.focused_masks,
+                        ..Default::default()
+                    });
+                }
+                let mark = if self.focused_rounding.is_empty() {
+                    [0; 2]
+                } else {
+                    self.overlay.paint_mark()
+                };
+                self.overlay
+                    .add_rect_outline(rect, 1.0, self.style.widget_bg_hovered, false);
+                for shape in &self.focused_rounding {
+                    self.overlay
+                        .clip_rounded_tail(mark, *shape, self.font.raster_scale());
+                }
+                self.overlay.pop_clip_rect();
+                self.overlay.set_effects(previous_effects);
+            }
+        }
         self.draw_vertices.clear();
         self.draw_indices.clear();
         self.draw_commands.clear();
+        self.draw_effects.clear();
         for window in &self.windows {
             if !window.open {
                 continue;
@@ -330,15 +776,32 @@ impl Context {
             self.draw_vertices.extend_from_slice(data.vertices);
             self.draw_indices
                 .extend(data.indices.iter().map(|i| i + vertex_base));
-            self.draw_commands.extend_from_slice(data.commands);
+            let base = self.draw_effects.len() as u32;
+            self.draw_effects.extend_from_slice(data.effects);
+            self.draw_commands.extend(data.commands.iter().map(|cmd| {
+                let mut cmd = cmd.clone();
+                if cmd.effects != 0 {
+                    cmd.effects += base;
+                }
+                cmd
+            }));
         }
         let data = self.overlay.as_draw_data();
         let vertex_base = self.draw_vertices.len() as u32;
         self.draw_vertices.extend_from_slice(data.vertices);
         self.draw_indices
             .extend(data.indices.iter().map(|i| i + vertex_base));
-        self.draw_commands.extend_from_slice(data.commands);
+        let base = self.draw_effects.len() as u32;
+        self.draw_effects.extend_from_slice(data.effects);
+        self.draw_commands.extend(data.commands.iter().map(|cmd| {
+            let mut cmd = cmd.clone();
+            if cmd.effects != 0 {
+                cmd.effects += base;
+            }
+            cmd
+        }));
         DrawData {
+            effects: &self.draw_effects,
             vertices: &self.draw_vertices,
             indices: &self.draw_indices,
             commands: &self.draw_commands,
@@ -351,18 +814,34 @@ impl Context {
         }
         let mouse = self.input.mouse_pos;
         let winner = self
-            .scroll_regions
+            .scroll_containers
             .iter()
             .rev()
             .find(|entry| entry.layer_owns_point && point_in_rect(mouse, entry.rect))
-            .map(|entry| (entry.id, entry.max_offset));
-        let Some((id, max_offset)) = winner else {
+            .map(|entry| (entry.id, entry.target, entry.max_offset, entry.line_height));
+        let Some((id, target, max_offset, line_height)) = winner else {
             return;
         };
-        let delta =
-            self.input.mouse_wheel * crate::ui::WHEEL_LINES_PER_NOTCH * self.font.line_height();
-        if let Some(WidgetState::Scroll { offset, .. }) = self.widget_states.get_mut(&id) {
-            *offset = (*offset - delta).clamp(0.0, max_offset);
+        let delta = self.input.mouse_wheel * crate::ui::WHEEL_LINES_PER_NOTCH * line_height;
+        match target {
+            ScrollTarget::Widget => {
+                if let Some(WidgetState::Scroll { offset, .. }) = self.widget_states.get(&id) {
+                    let old = *offset;
+                    let next = self.scroll_target(id, old, delta, max_offset);
+                    if let Some(WidgetState::Scroll { offset, .. }) =
+                        self.widget_states.get_mut(&id)
+                    {
+                        *offset = next;
+                    }
+                }
+            }
+            ScrollTarget::Window => {
+                if let Some(index) = self.windows.iter().position(|w| w.id == id) {
+                    let old = self.windows[index].scroll_offset;
+                    self.windows[index].scroll_offset =
+                        self.scroll_target(id, old, delta, max_offset);
+                }
+            }
         }
     }
 
@@ -406,10 +885,47 @@ impl Context {
 
     pub(crate) fn set_active(&mut self, id: Id) {
         self.active = Some(id);
+        self.active_in_popup = self.popup_scope_active;
+        self.active_list_index = None;
+        self.active_groups.clone_from(&self.disabled_groups);
+        self.rounded_capture_path.clear();
+        self.rounded_capture_path.extend(
+            self.rounded_clips
+                .iter()
+                .filter(|clip| {
+                    clip.popup == self.popup_scope_active
+                        && clip.popup_id == self.routing.scope_id()
+                        && clip.window == self.current_window
+                })
+                .map(|clip| clip.id),
+        );
     }
 
     pub(crate) fn clear_active(&mut self) {
         self.active = None;
+        self.active_in_popup = false;
+        self.active_list_index = None;
+        self.active_groups.clear();
+        self.rounded_capture_path.clear();
+    }
+
+    pub(crate) fn release_popup_capture(&mut self) {
+        if self.active_in_popup {
+            if let Some(id) = self.active {
+                if let Some(WidgetState::Keybind { armed }) = self.widget_states.get_mut(&id) {
+                    *armed = false;
+                }
+            }
+            self.clear_active();
+        }
+        if self.focused_in_popup {
+            self.focused = None;
+            self.focused_in_popup = false;
+            self.focused_in_modal = false;
+            self.focus_rect = None;
+            self.focus_clip = None;
+            self.keyboard_activate = None;
+        }
     }
 
     pub fn set_window_open(&mut self, title: &str, open: bool) {
@@ -432,14 +948,85 @@ impl Context {
         }
     }
 
+    pub fn set_window_rect(&mut self, title: &str, pos: [f32; 2], size: [f32; 2]) {
+        if !pos.iter().chain(size.iter()).all(|v| v.is_finite()) {
+            return;
+        }
+        let index = self.find_or_create_window(title);
+        let window = &mut self.windows[index];
+        window.pos = pos;
+        window.size = [
+            size[0].max(MIN_WINDOW_SIZE[0]),
+            size[1].max(MIN_WINDOW_SIZE[1]),
+        ];
+    }
+
+    pub fn set_scrollbar_skin(&mut self, skin: crate::scroll::ScrollbarSkin) {
+        let values = [
+            skin.track_inset,
+            skin.thumb_inset,
+            skin.track_rounding,
+            skin.thumb_rounding,
+            skin.min_thumb,
+        ];
+        if values.iter().any(|v| !v.is_finite())
+            || skin.track_inset < 0.0
+            || skin.thumb_inset < 0.0
+            || skin.track_rounding < 0.0
+            || skin.thumb_rounding < -1.0
+            || skin.min_thumb <= 0.0
+        {
+            return;
+        }
+        self.scrollbar_skin = skin;
+    }
+
+    pub fn scrollbar_skin(&self) -> crate::scroll::ScrollbarSkin {
+        self.scrollbar_skin
+    }
+
+    pub fn hovered_widget_id(&self) -> Option<Id> {
+        self.hot
+    }
+
+    pub fn captured_widget_id(&self) -> Option<Id> {
+        self.active
+    }
+
+    pub fn focused_widget_id(&self) -> Option<Id> {
+        self.focused
+    }
+
+    pub fn inspect_windows(&self) -> impl Iterator<Item = WindowInspection<'_>> + '_ {
+        self.windows
+            .iter()
+            .filter(|window| window.open)
+            .map(|window| {
+                let data = window.draw_list.as_draw_data();
+                WindowInspection {
+                    title: &window.title,
+                    rect: window.rect(),
+                    vertices: data.vertices.len(),
+                    indices: data.indices.len(),
+                    commands: data.commands,
+                }
+            })
+    }
+
+    pub fn inspect_overlay_commands(&self) -> &[DrawCmd] {
+        self.overlay.as_draw_data().commands
+    }
+
     pub fn wants_mouse_capture(&self) -> bool {
         if self.active.is_some() || self.hover_top_window.is_some() {
             return true;
         }
-        self.open_popup.is_some()
-            && self
-                .popup_rect
-                .is_some_and(|rect| point_in_rect(self.input.mouse_pos, rect))
+        self.routing.popups[..self.routing.count]
+            .iter()
+            .any(|slot| {
+                slot.rect
+                    .is_some_and(|rect| point_in_rect(self.input.mouse_pos, rect))
+            })
     }
 
     pub fn wants_keyboard_capture(&self) -> bool {
@@ -453,8 +1040,80 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tab_focuses_visible_buttons_and_enter_activates_once() {
+        use crate::input::{InputState, Key, KeyEvent};
+        use crate::widgets::test_support::{frame, frame_with_input, test_context};
+        let mut ctx = test_context();
+        let mut first = None;
+        frame(&mut ctx, [-50.0, -50.0], false, |ui| {
+            first = Some(ui.widget_id("First"));
+            ui.button("First");
+            ui.button("Second");
+        });
+        frame_with_input(
+            &mut ctx,
+            0.016,
+            InputState {
+                keys: &[KeyEvent::Press(Key::Tab)],
+                ..Default::default()
+            },
+            |ui| {
+                ui.button("First");
+                ui.button("Second");
+            },
+        );
+        assert_eq!(ctx.focused_widget_id(), first);
+        let mut activated = false;
+        frame_with_input(
+            &mut ctx,
+            0.016,
+            InputState {
+                keys: &[KeyEvent::Press(Key::Enter)],
+                ..Default::default()
+            },
+            |ui| {
+                activated = ui.button("First");
+                ui.button("Second");
+            },
+        );
+        assert!(activated);
+        frame(&mut ctx, [-50.0, -50.0], false, |ui| {
+            activated = ui.button("First");
+            ui.button("Second");
+        });
+        assert!(!activated);
+    }
+
+    #[test]
+    fn fully_clipped_custom_control_is_not_a_tab_stop() {
+        use crate::widgets::test_support::{frame, test_context};
+        let mut ctx = test_context();
+        frame(&mut ctx, [-50.0, -50.0], false, |ui| {
+            let id = ui.widget_id("offscreen");
+            ui.focusable(id, [1000.0, 1000.0, 1030.0, 1030.0]);
+        });
+        assert!(ctx.focus_order.is_empty());
+    }
+
+    #[test]
+    fn modal_focus_order_excludes_background_controls() {
+        use crate::widgets::test_support::{frame, test_context};
+        let mut ctx = test_context();
+        frame(&mut ctx, [-50.0, -50.0], false, |ui| {
+            let modal = ui.widget_id("modal");
+            ui.open_modal(modal);
+            ui.button("Background");
+            if ui.begin_modal(modal, [40.0, 40.0, 220.0, 140.0]) {
+                ui.button("Inside");
+                ui.end_popup();
+            }
+        });
+        assert_eq!(ctx.focus_order.len(), 1);
+    }
     use super::*;
     use crate::input::Key;
+    use crate::scroll::ScrollFlags;
 
     const DEJAVU_SANS: &[u8] = include_bytes!("../tests/assets/DejaVuSans.ttf");
 
@@ -497,33 +1156,33 @@ mod tests {
 
         ctx.set_input(InputState {
             mouse_pos: [10.0, 20.0],
-            mouse_down: [true, false, false],
+            mouse_down: [true, false, false, false, false],
             mouse_wheel: 1.0,
             keys: &[KeyEvent::Char('a'), KeyEvent::Press(Key::Enter)],
             viewport_size: [800.0, 600.0],
         });
         ctx.new_frame(0.016);
         assert_eq!(ctx.input.mouse_pos, [10.0, 20.0]);
-        assert_eq!(ctx.input.mouse_down, [true, false, false]);
+        assert_eq!(ctx.input.mouse_down, [true, false, false, false, false]);
         assert_eq!(ctx.input.mouse_wheel, 1.0);
         assert_eq!(ctx.input.viewport_size, [800.0, 600.0]);
         assert_eq!(
             ctx.input.keys,
             alloc::vec![KeyEvent::Char('a'), KeyEvent::Press(Key::Enter)]
         );
-        assert_eq!(ctx.prev_mouse_down, [false; 3]);
+        assert_eq!(ctx.prev_mouse_down, [false; 5]);
         ctx.render();
 
         ctx.set_input(InputState {
             mouse_pos: [11.0, 21.0],
-            mouse_down: [false, false, false],
+            mouse_down: [false, false, false, false, false],
             mouse_wheel: 0.0,
             keys: &[],
             viewport_size: [800.0, 600.0],
         });
         ctx.new_frame(0.016);
-        assert_eq!(ctx.input.mouse_down, [false; 3]);
-        assert_eq!(ctx.prev_mouse_down, [true, false, false]);
+        assert_eq!(ctx.input.mouse_down, [false; 5]);
+        assert_eq!(ctx.prev_mouse_down, [true, false, false, false, false]);
         assert!(ctx.input.keys.is_empty());
         ctx.render();
     }
@@ -576,7 +1235,7 @@ mod tests {
         let mut ctx = test_context();
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        ui.window("Win", |_| {});
+        ui.window("Win", ScrollFlags::NONE, |_| {});
         let _ = ui;
         ctx.render();
 
@@ -592,8 +1251,8 @@ mod tests {
         let mut ctx = test_context();
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        ui.window("A", |_| {});
-        ui.window("B", |_| {});
+        ui.window("A", ScrollFlags::NONE, |_| {});
+        ui.window("B", ScrollFlags::NONE, |_| {});
         let _ = ui;
 
         assert_eq!(ctx.windows[0].pos, DEFAULT_WINDOW_POS);
@@ -606,8 +1265,26 @@ mod tests {
             ]
         );
         let mut ui = ctx.ui();
-        ui.window("A", |_| {});
+        ui.window("A", ScrollFlags::NONE, |_| {});
         let _ = ui;
+        assert_eq!(ctx.windows.len(), 2);
+        ctx.render();
+    }
+
+    #[test]
+    fn host_can_place_windows_before_the_first_frame() {
+        let mut ctx = test_context();
+        ctx.set_window_rect("Gallery", [72.0, 86.0], [720.0, 640.0]);
+        ctx.set_window_rect("Inspector", [816.0, 86.0], [462.0, 300.0]);
+        ctx.new_frame(0.016);
+        let mut ui = ctx.ui();
+        ui.window("Gallery", ScrollFlags::NONE, |_| {});
+        ui.window("Inspector", ScrollFlags::NONE, |_| {});
+        let _ = ui;
+        assert_eq!(ctx.windows[0].pos, [72.0, 86.0]);
+        assert_eq!(ctx.windows[0].size, [720.0, 640.0]);
+        assert_eq!(ctx.windows[1].pos, [816.0, 86.0]);
+        assert_eq!(ctx.windows[1].size, [462.0, 300.0]);
         assert_eq!(ctx.windows.len(), 2);
         ctx.render();
     }
@@ -617,10 +1294,46 @@ mod tests {
         Context::with_font(font)
     }
 
+    #[test]
+    fn replacing_font_for_dpi_keeps_window_state() {
+        let mut ctx = test_context();
+        ctx.new_frame(0.016);
+        ctx.ui().window("Persistent", ScrollFlags::NONE, |_| {});
+        let _ = ctx.render();
+        ctx.set_window_open("Persistent", false);
+        let before = (ctx.windows[0].pos, ctx.windows[0].size, ctx.windows[0].open);
+
+        let font = Font::new_with_icons_at_scale(DEJAVU_SANS, DEFAULT_FONT_SIZE, &[], 1.5).unwrap();
+        ctx.replace_font(font);
+        assert_eq!(
+            (ctx.windows[0].pos, ctx.windows[0].size, ctx.windows[0].open),
+            before
+        );
+        assert_eq!(ctx.font().raster_scale(), 1.5);
+    }
+
+    #[test]
+    fn subpixel_mode_survives_dpi_replacement() {
+        let mut ctx = test_context();
+        ctx.set_text_raster_mode(crate::font::TextRasterMode::Subpixel);
+        let font = Font::new_with_icons_at_scale(DEJAVU_SANS, DEFAULT_FONT_SIZE, &[], 1.5).unwrap();
+        ctx.replace_font(font);
+        assert_eq!(
+            ctx.text_raster_mode(),
+            crate::font::TextRasterMode::Subpixel
+        );
+        assert_eq!(ctx.font().raster_scale(), 1.5);
+        ctx.new_frame(0.016);
+        ctx.ui().window("phase", ScrollFlags::NONE, |ui| {
+            ui.draw_text_at([100.25, 90.5], "Fractional text", [255; 4]);
+        });
+        assert!(!ctx.render().vertices.is_empty());
+    }
+
     fn content_start_y(ctx: &mut Context) -> f32 {
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        ui.window("Win", |_| {});
+        ui.window("Win", ScrollFlags::NONE, |_| {});
         let _ = ui;
         let y = ctx.windows[0].cursor.pos_y();
         ctx.render();
@@ -632,7 +1345,7 @@ mod tests {
         let mut ctx = test_context_at(24.0);
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        ui.window("Win", |ui| {
+        ui.window("Win", ScrollFlags::NONE, |ui| {
             ui.label("hello");
         });
         let _ = ui;
@@ -671,7 +1384,7 @@ mod tests {
             DEFAULT_WINDOW_POS[1] + ctx.font().line_height() + 2.0 * ctx.style.frame_padding[1];
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        ui.window("Title Text", |_| {});
+        ui.window("Title Text", ScrollFlags::NONE, |_| {});
         let _ = ui;
         let data = ctx.render();
 
@@ -704,7 +1417,7 @@ mod tests {
         let mut ctx = test_context_at(24.0);
         ctx.new_frame(0.016);
         let mut ui = ctx.ui();
-        ui.window("Win", |ui| {
+        ui.window("Win", ScrollFlags::NONE, |ui| {
             ui.label("hello");
         });
         let _ = ui;

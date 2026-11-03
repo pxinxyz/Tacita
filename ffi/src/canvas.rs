@@ -148,13 +148,16 @@ pub unsafe extern "C" fn gui_draw_polygon_filled(
                 crate::set_last_error(GuiErrorCode::InvalidInput);
                 return;
             }
-            // Null with a zero count is legal and means "draw nothing, confidently". Null with a nonzero count gets you InvalidInput and a stern look.
-            let raw = if point_count == 0 {
-                &[][..]
-            } else {
-                unsafe { std::slice::from_raw_parts(points, point_count) }
+            let Some(raw) = (unsafe { crate::slice_arg(points, point_count) }) else {
+                crate::set_last_error(GuiErrorCode::InvalidInput);
+                return;
             };
-            let pts: Vec<[f32; 2]> = raw.iter().map(|&p| p.into()).collect();
+            let mut pts = Vec::new();
+            if pts.try_reserve_exact(raw.len()).is_err() {
+                crate::set_last_error(GuiErrorCode::InvalidInput);
+                return;
+            }
+            pts.extend(raw.iter().map(|&p| -> [f32; 2] { p.into() }));
             gui.ctx.ui().draw_polygon_filled(&pts, col.into());
         },
         ()
@@ -258,7 +261,9 @@ mod tests {
         let input = input_at(AWAY, false);
         let mut count = 0;
         crate::test_support::frame(ctx, &input, |ctx| {
-            assert!(unsafe { crate::gui_begin_window(ctx, b"W".as_ptr(), 1) });
+            assert!(unsafe {
+                crate::gui_begin_window(ctx, b"W".as_ptr(), 1, crate::GUI_SCROLL_NONE)
+            });
             content(ctx);
             unsafe { crate::gui_end_window(ctx) };
             count = unsafe { crate::gui_render(ctx) }.vertex_count;
@@ -312,7 +317,9 @@ mod tests {
         let ctx = new_context();
         let input = input_at(AWAY, false);
         crate::test_support::frame(ctx, &input, |ctx| {
-            assert!(unsafe { crate::gui_begin_window(ctx, b"W".as_ptr(), 1) });
+            assert!(unsafe {
+                crate::gui_begin_window(ctx, b"W".as_ptr(), 1, crate::GUI_SCROLL_NONE)
+            });
             unsafe {
                 crate::gui_draw_image(
                     ctx,

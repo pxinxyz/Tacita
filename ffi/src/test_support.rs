@@ -11,7 +11,6 @@ pub(crate) const AWAY: [f32; 2] = [-1000.0, -1000.0];
 pub(crate) const WINDOW_POS: [f32; 2] = [60.0, 60.0];
 pub(crate) const WINDOW_SIZE: [f32; 2] = [300.0, 400.0];
 
-// Predicts widget rects from public Style/Font metrics so tests can assert exact pixels. A test that knows where every pixel lives is a test that fears nothing.
 pub(crate) fn new_context() -> *mut GuiContext {
     let ctx = unsafe { gui_context_new(DEJAVU_SANS.as_ptr(), DEJAVU_SANS.len()) };
     assert!(!ctx.is_null(), "valid font must produce a context");
@@ -21,7 +20,7 @@ pub(crate) fn new_context() -> *mut GuiContext {
 pub(crate) fn input_at(mouse_pos: [f32; 2], left_down: bool) -> GuiInput {
     GuiInput {
         mouse_pos,
-        mouse_down: [left_down as u8, 0, 0],
+        mouse_down: [left_down as u8, 0, 0, 0, 0],
         mouse_wheel: 0.0,
         viewport_size: [800.0, 600.0],
         keys: ptr::null(),
@@ -43,7 +42,7 @@ pub(crate) fn window_frame(
 ) {
     let input = input_at(mouse_pos, left_down);
     frame(ctx, &input, |ctx| {
-        assert!(unsafe { crate::gui_begin_window(ctx, b"W".as_ptr(), 1) });
+        assert!(unsafe { crate::gui_begin_window(ctx, b"W".as_ptr(), 1, crate::GUI_SCROLL_NONE) });
         content(ctx);
         unsafe { crate::gui_end_window(ctx) };
     });
@@ -59,7 +58,7 @@ pub(crate) fn window_frame_keys(
     input.keys = keys.as_ptr();
     input.key_count = keys.len();
     frame(ctx, &input, |ctx| {
-        assert!(unsafe { crate::gui_begin_window(ctx, b"W".as_ptr(), 1) });
+        assert!(unsafe { crate::gui_begin_window(ctx, b"W".as_ptr(), 1, crate::GUI_SCROLL_NONE) });
         content(ctx);
         unsafe { crate::gui_end_window(ctx) };
     });

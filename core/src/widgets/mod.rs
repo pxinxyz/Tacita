@@ -1,30 +1,225 @@
 pub(crate) mod button;
 pub(crate) mod checkbox;
+pub(crate) mod choice_controls;
+pub(crate) mod decorations;
+pub(crate) mod drag_value;
+pub(crate) mod form_nav;
 pub(crate) mod label;
+pub(crate) mod progress;
+pub(crate) mod radio;
+pub(crate) mod range_slider;
 pub(crate) mod slider;
+pub(crate) mod spinner;
 pub(crate) mod text_input;
+
+#[cfg(test)]
+mod radio_progress_tree_tests;
 
 use crate::context::Context;
 use crate::draw::{DrawList, TextureId};
 use crate::font::{Font, ShapeKey, ShapeMask};
 use crate::id::Id;
 
-// Borders are the fill lightened by exactly 40. Why 40? It looked right in M1 and no audit since has dared to question it.
 pub(crate) const BORDER_LIGHTEN: u8 = 40;
+
+fn leading_pixel_offset(edge: f32) -> f32 {
+    let v = edge - 0.5;
+    let truncated = v as i32 as f32;
+    let ceiled = if truncated < v {
+        truncated + 1.0
+    } else {
+        truncated
+    };
+    ceiled + 0.5 - edge
+}
+
+fn corner_subrect_axis(
+    uv_min: f32,
+    texel: f32,
+    ox: f32,
+    rq: f32,
+    scale: f32,
+    edge: f32,
+    mirrored: bool,
+) -> (f32, f32) {
+    let d = leading_pixel_offset(edge) * scale;
+    if mirrored {
+        let lead = uv_min + (ox + rq - 0.5 + d) * texel;
+        (lead, lead - rq * texel)
+    } else {
+        let lead = uv_min + (ox + 0.5 - d) * texel;
+        (lead, lead + rq * texel)
+    }
+}
 
 pub(crate) fn widget_id(ctx: &Context, label: &str) -> Id {
     ctx.id_stack.id(label)
 }
 
 pub(crate) fn register_item(ctx: &mut Context, id: Id, rect: [f32; 4]) {
+    if ctx.disabled_depth > 0 {
+        if ctx.active == Some(id) {
+            ctx.clear_active();
+        }
+        if ctx.focused == Some(id) {
+            ctx.focused = None;
+            ctx.focused_in_popup = false;
+            ctx.focused_in_modal = false;
+            ctx.focus_rect = None;
+            ctx.focus_clip = None;
+            ctx.keyboard_activate = None;
+        }
+        if let Some(crate::context::WidgetState::Keybind { armed }) = ctx.widget_states.get_mut(&id)
+        {
+            *armed = false;
+        }
+    }
+    ctx.id_stack
+        .inspector
+        .interactive(id, rect, crate::diagnostics::InspectionFlags::INTERACTIVE);
     ctx.last_item = Some((id, rect));
+    ctx.duplicate_ids.register(id, rect);
+    ctx.semantic_register(id, rect, false);
+    ctx.request_cursor(id, rect, crate::host_requests::CursorShape::Pointer);
+}
+
+pub(crate) fn register_focusable_item(ctx: &mut Context, id: Id, rect: [f32; 4]) {
+    register_item(ctx, id, rect);
+    ctx.semantic_register(id, rect, true);
+    ctx.id_stack
+        .inspector
+        .interactive(id, rect, crate::diagnostics::InspectionFlags::FOCUSABLE);
+    if ctx.rounded_clips.iter().any(|clip| {
+        clip.popup == ctx.popup_scope_active
+            && clip.popup_id == ctx.routing.scope_id()
+            && clip.window == ctx.current_window
+            && !clip.shape.intersects(rect)
+    }) {
+        return;
+    }
+    if ctx.disabled_depth == 0 && ctx.popup_input_allowed() {
+        let clip = if ctx.popup_scope_active {
+            ctx.overlay.current_clip()
+        } else if let Some(window_id) = ctx.current_window {
+            ctx.windows[ctx.window_index(window_id)]
+                .draw_list
+                .current_clip()
+        } else {
+            rect
+        };
+        let clip = if let Some(interaction) = ctx.interaction_clip {
+            [
+                clip[0].max(interaction[0]),
+                clip[1].max(interaction[1]),
+                clip[2].min(interaction[2]),
+                clip[3].min(interaction[3]),
+            ]
+        } else {
+            clip
+        };
+        if rect[2].min(clip[2]) <= rect[0].max(clip[0])
+            || rect[3].min(clip[3]) <= rect[1].max(clip[1])
+        {
+            return;
+        }
+        ctx.focus_order.push(id);
+        ctx.routing.focus_regions.push((id, rect));
+        if let Some(window) = ctx.current_window {
+            ctx.routing.focus_windows.push((id, window));
+        }
+        if ctx.input.mouse_down[0]
+            && !ctx.prev_mouse_down[0]
+            && crate::ui::point_in_rect(ctx.input.mouse_pos, ctx.target_rect(rect))
+            && crate::ui::hover_layer_gate(ctx)
+        {
+            ctx.focused = Some(id);
+            ctx.focused_in_modal = ctx.popup_modal;
+            ctx.focused_in_popup = ctx.popup_scope_active;
+        }
+        if ctx.focused == Some(id) {
+            ctx.focus_rect = Some(rect);
+            ctx.focus_clip = Some(clip);
+            ctx.focused_masks = draw_parts(ctx).1.effects_state().masks;
+            ctx.focused_rounding.clear();
+            ctx.focused_rounding.extend(
+                ctx.rounded_clips
+                    .iter()
+                    .filter(|clip| {
+                        clip.popup == ctx.popup_scope_active
+                            && clip.popup_id == ctx.routing.scope_id()
+                            && clip.window == ctx.current_window
+                    })
+                    .map(|clip| clip.shape),
+            );
+        }
+        if ctx.motion.active() {
+            let amount = ctx.motion_tween(
+                id,
+                crate::animation::FOCUS,
+                0.0,
+                if ctx.focused == Some(id) { 1.0 } else { 0.0 },
+                ctx.motion.focus,
+                ctx.motion.easing,
+            );
+            if amount > 0.0 {
+                let mut color = ctx.style.widget_bg_hovered;
+                color[3] = (color[3] as f32 * amount + 0.5) as u8;
+                let index = ctx.focus_visuals.len();
+                let masks = draw_parts(ctx).1.effects_state().masks;
+                if masks.count > 0 {
+                    ctx.focus_mask_visuals.push((index, masks));
+                }
+                ctx.focus_rounding.extend(
+                    ctx.rounded_clips
+                        .iter()
+                        .filter(|clip| {
+                            clip.popup == ctx.popup_scope_active
+                                && clip.popup_id == ctx.routing.scope_id()
+                                && clip.window == ctx.current_window
+                        })
+                        .map(|clip| (index, clip.shape)),
+                );
+                ctx.focus_visuals.push((rect, clip, color));
+            }
+        }
+    }
 }
 
 pub(crate) fn item_rect(ctx: &mut Context, size: [f32; 2]) -> [f32; 4] {
-    if ctx.popup_scope_active {
-        return ctx.overlay_cursor.advance(size);
+    let rect = if ctx.popup_scope_active {
+        ctx.overlay_cursor.advance(size)
+    } else {
+        ctx.current_window_mut().cursor.advance(size)
+    };
+    if ctx.id_stack.inspector.enabled() {
+        let fallback = ctx
+            .id_stack
+            .id_index(usize::MAX - ctx.id_stack.inspector.count());
+        ctx.id_stack
+            .inspector
+            .item(rect, ctx.disabled_depth > 0, fallback);
     }
-    ctx.current_window_mut().cursor.advance(size)
+    if ctx.id_stack.semantics.enabled() {
+        let fallback = ctx
+            .id_stack
+            .id_index(usize::MAX - ctx.accessibility_count());
+        ctx.id_stack
+            .semantics
+            .item(fallback, ctx.semantic_clip(rect), ctx.semantic_states(rect));
+    }
+    rect
+}
+
+pub(crate) fn interactive_rect(ctx: &mut Context, size: [f32; 2]) -> [f32; 4] {
+    let min = ctx.host_requests.policy.minimum;
+    if min == [0.; 2] {
+        return item_rect(ctx, size);
+    }
+    let reserved = [size[0].max(min[0]), size[1].max(min[1])];
+    let outer = item_rect(ctx, reserved);
+    let x = outer[0] + (reserved[0] - size[0]) * 0.5;
+    let y = outer[1] + (reserved[1] - size[1]) * 0.5;
+    [x, y, x + size[0], y + size[1]]
 }
 
 pub(crate) fn available_width(ctx: &mut Context) -> f32 {
@@ -81,46 +276,79 @@ fn emit_rounded_border(
     col: [u8; 4],
 ) {
     let [x0, y0, x1, y1] = rect;
-    let rq = crate::font::quantize_quarter_px(r) as f32 / 4.0;
+    let rq = crate::font::quantize_quarter_px(r) as f32 / 4.0 * mask.raster_scale;
     let bw = mask.rect[2] as f32;
     let ox = (bw - rq) / 2.0;
-    let du = mask.uv_max[0] - mask.uv_min[0];
-    let dv = mask.uv_max[1] - mask.uv_min[1];
-    let u0 = mask.uv_min[0] + ox / bw * du;
-    let u1 = mask.uv_min[0] + (ox + rq) / bw * du;
-    let v0 = mask.uv_min[1] + ox / bw * dv;
-    let v1 = mask.uv_min[1] + (ox + rq) / bw * dv;
+    let texel_u = (mask.uv_max[0] - mask.uv_min[0]) / bw;
+    let texel_v = (mask.uv_max[1] - mask.uv_min[1]) / bw;
+    let scale = rq / (r * mask.raster_scale);
+    let ul = corner_subrect_axis(
+        mask.uv_min[0],
+        texel_u,
+        ox,
+        rq,
+        scale,
+        x0 * mask.raster_scale,
+        false,
+    );
+    let ur = corner_subrect_axis(
+        mask.uv_min[0],
+        texel_u,
+        ox,
+        rq,
+        scale,
+        (x1 - r) * mask.raster_scale,
+        true,
+    );
+    let vt = corner_subrect_axis(
+        mask.uv_min[1],
+        texel_v,
+        ox,
+        rq,
+        scale,
+        y0 * mask.raster_scale,
+        false,
+    );
+    let vb = corner_subrect_axis(
+        mask.uv_min[1],
+        texel_v,
+        ox,
+        rq,
+        scale,
+        (y1 - r) * mask.raster_scale,
+        true,
+    );
 
     draw_list.add_textured_quad(
         TextureId::FONT,
         [x0, y0],
         [x0 + r, y0 + r],
-        [u0, v0],
-        [u1, v1],
+        [ul.0, vt.0],
+        [ul.1, vt.1],
         col,
     );
     draw_list.add_textured_quad(
         TextureId::FONT,
         [x1 - r, y0],
         [x1, y0 + r],
-        [u1, v0],
-        [u0, v1],
+        [ur.0, vt.0],
+        [ur.1, vt.1],
         col,
     );
     draw_list.add_textured_quad(
         TextureId::FONT,
         [x0, y1 - r],
         [x0 + r, y1],
-        [u0, v1],
-        [u1, v0],
+        [ul.0, vb.0],
+        [ul.1, vb.1],
         col,
     );
     draw_list.add_textured_quad(
         TextureId::FONT,
         [x1 - r, y1 - r],
         [x1, y1],
-        [u1, v1],
-        [u0, v0],
+        [ur.0, vb.0],
+        [ur.1, vb.1],
         col,
     );
     fill_part(draw_list, [x0 + r, y0], [x1 - r, y0 + thickness], col);
@@ -183,47 +411,80 @@ fn emit_rounded_fill(
     top_only: bool,
 ) {
     let [x0, y0, x1, y1] = rect;
-    let rq = crate::font::quantize_quarter_px(r) as f32 / 4.0;
+    let rq = crate::font::quantize_quarter_px(r) as f32 / 4.0 * mask.raster_scale;
     let bw = mask.rect[2] as f32;
     let ox = (bw - rq) / 2.0;
-    let du = mask.uv_max[0] - mask.uv_min[0];
-    let dv = mask.uv_max[1] - mask.uv_min[1];
-    let u0 = mask.uv_min[0] + ox / bw * du;
-    let u1 = mask.uv_min[0] + (ox + rq) / bw * du;
-    let v0 = mask.uv_min[1] + ox / bw * dv;
-    let v1 = mask.uv_min[1] + (ox + rq) / bw * dv;
+    let texel_u = (mask.uv_max[0] - mask.uv_min[0]) / bw;
+    let texel_v = (mask.uv_max[1] - mask.uv_min[1]) / bw;
+    let scale = rq / (r * mask.raster_scale);
+    let ul = corner_subrect_axis(
+        mask.uv_min[0],
+        texel_u,
+        ox,
+        rq,
+        scale,
+        x0 * mask.raster_scale,
+        false,
+    );
+    let ur = corner_subrect_axis(
+        mask.uv_min[0],
+        texel_u,
+        ox,
+        rq,
+        scale,
+        (x1 - r) * mask.raster_scale,
+        true,
+    );
+    let vt = corner_subrect_axis(
+        mask.uv_min[1],
+        texel_v,
+        ox,
+        rq,
+        scale,
+        y0 * mask.raster_scale,
+        false,
+    );
 
     draw_list.add_textured_quad(
         TextureId::FONT,
         [x0, y0],
         [x0 + r, y0 + r],
-        [u0, v0],
-        [u1, v1],
+        [ul.0, vt.0],
+        [ul.1, vt.1],
         col,
     );
     draw_list.add_textured_quad(
         TextureId::FONT,
         [x1 - r, y0],
         [x1, y0 + r],
-        [u1, v0],
-        [u0, v1],
+        [ur.0, vt.0],
+        [ur.1, vt.1],
         col,
     );
     if !top_only {
+        let vb = corner_subrect_axis(
+            mask.uv_min[1],
+            texel_v,
+            ox,
+            rq,
+            scale,
+            (y1 - r) * mask.raster_scale,
+            true,
+        );
         draw_list.add_textured_quad(
             TextureId::FONT,
             [x0, y1 - r],
             [x0 + r, y1],
-            [u0, v1],
-            [u1, v0],
+            [ul.0, vb.0],
+            [ul.1, vb.1],
             col,
         );
         draw_list.add_textured_quad(
             TextureId::FONT,
             [x1 - r, y1 - r],
             [x1, y1],
-            [u1, v1],
-            [u0, v0],
+            [ur.0, vb.0],
+            [ur.1, vb.1],
             col,
         );
     }
@@ -289,6 +550,7 @@ pub(crate) mod test_support {
     use crate::draw::TextureId;
     use crate::id::Id;
     use crate::input::InputState;
+    use crate::scroll::ScrollFlags;
     use crate::ui::Ui;
 
     pub(crate) const DEJAVU_SANS: &[u8] = include_bytes!("../../tests/assets/DejaVuSans.ttf");
@@ -308,7 +570,7 @@ pub(crate) mod test_support {
             0.016,
             InputState {
                 mouse_pos,
-                mouse_down: [left_down, false, false],
+                mouse_down: [left_down, false, false, false, false],
                 ..Default::default()
             },
             f,
@@ -325,7 +587,7 @@ pub(crate) mod test_support {
         ctx.new_frame(dt);
         {
             let mut ui = ctx.ui();
-            ui.window("W", f);
+            ui.window("W", ScrollFlags::NONE, f);
         }
         ctx.render();
     }

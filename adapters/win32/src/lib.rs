@@ -19,7 +19,13 @@ const WM_MBUTTONDOWN: u32 = 0x0207;
 const WM_MBUTTONUP: u32 = 0x0208;
 const WM_MBUTTONDBLCLK: u32 = 0x0209;
 const WM_MOUSEWHEEL: u32 = 0x020A;
+const WM_XBUTTONDOWN: u32 = 0x020B;
+const WM_XBUTTONUP: u32 = 0x020C;
+const WM_XBUTTONDBLCLK: u32 = 0x020D;
 const WM_SIZE: u32 = 0x0005;
+
+const XBUTTON1: u16 = 0x0001;
+const XBUTTON2: u16 = 0x0002;
 
 const WHEEL_DELTA: i16 = 120;
 
@@ -34,7 +40,9 @@ const VK_SPACE: u16 = 0x20;
 const VK_END: u16 = 0x23;
 const VK_HOME: u16 = 0x24;
 const VK_LEFT: u16 = 0x25;
+const VK_UP: u16 = 0x26;
 const VK_RIGHT: u16 = 0x27;
+const VK_DOWN: u16 = 0x28;
 const VK_INSERT: u16 = 0x2D;
 const VK_DELETE: u16 = 0x2E;
 const VK_0: u16 = 0x30;
@@ -109,7 +117,9 @@ fn vk_to_key(vk: u16) -> Option<Key> {
         VK_BACK => Some(Key::Backspace),
         VK_DELETE => Some(Key::Delete),
         VK_LEFT => Some(Key::Left),
+        VK_UP => Some(Key::Up),
         VK_RIGHT => Some(Key::Right),
+        VK_DOWN => Some(Key::Down),
         VK_HOME => Some(Key::Home),
         VK_END => Some(Key::End),
         VK_RETURN => Some(Key::Enter),
@@ -134,7 +144,12 @@ fn lparam_xy(lparam: isize) -> (i16, i16) {
     )
 }
 
-fn mouse_button(msg: u32) -> Option<(usize, bool)> {
+fn mouse_button(msg: u32, wparam: usize) -> Option<(usize, bool)> {
+    let xbutton = || match ((wparam >> 16) & 0xFFFF) as u16 {
+        XBUTTON1 => Some(3usize),
+        XBUTTON2 => Some(4usize),
+        _ => None,
+    };
     match msg {
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => Some((0, true)),
         WM_LBUTTONUP => Some((0, false)),
@@ -142,13 +157,15 @@ fn mouse_button(msg: u32) -> Option<(usize, bool)> {
         WM_RBUTTONUP => Some((1, false)),
         WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => Some((2, true)),
         WM_MBUTTONUP => Some((2, false)),
+        WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => xbutton().map(|i| (i, true)),
+        WM_XBUTTONUP => xbutton().map(|i| (i, false)),
         _ => None,
     }
 }
 
 pub struct Win32InputAdapter {
     mouse_pos: [f32; 2],
-    mouse_down: [bool; 3],
+    mouse_down: [bool; 5],
     wheel: f32,
     events: Vec<KeyEvent>,
     spare: Vec<KeyEvent>,
@@ -159,7 +176,7 @@ impl Win32InputAdapter {
     pub fn new() -> Self {
         Self {
             mouse_pos: [0.0; 2],
-            mouse_down: [false; 3],
+            mouse_down: [false; 5],
             wheel: 0.0,
             events: Vec::new(),
             spare: Vec::new(),
@@ -167,9 +184,8 @@ impl Win32InputAdapter {
         }
     }
 
-    // Raw integers, not windows-crate types: your WndProc hook, your rules, any bindings version. We take msg/wparam/lparam like it's 1995.
     pub fn handle_message(&mut self, msg: u32, wparam: usize, lparam: isize) -> bool {
-        if let Some((index, pressed)) = mouse_button(msg) {
+        if let Some((index, pressed)) = mouse_button(msg, wparam) {
             self.mouse_down[index] = pressed;
             return true;
         }
@@ -204,7 +220,6 @@ impl Win32InputAdapter {
                 true
             }
             WM_CHAR => {
-                // Surrogate halves rejected here. Non-BMP text input is out of scope; emoji in your config filenames remains a dream.
                 if let Some(c) = char::from_u32(wparam as u32) {
                     if !c.is_control() {
                         self.events.push(KeyEvent::Char(c));
@@ -217,7 +232,7 @@ impl Win32InputAdapter {
     }
 
     pub fn clear_held(&mut self) {
-        self.mouse_down = [false; 3];
+        self.mouse_down = [false; 5];
         self.events.clear();
     }
 
@@ -226,7 +241,6 @@ impl Win32InputAdapter {
     }
 
     pub fn begin_frame(&mut self) -> FrameInput {
-        // Buffer swap, not clone: the frame's events leave in an owning FrameInput and the buffer comes home at end_frame. Steady frames allocate nothing.
         core::mem::swap(&mut self.events, &mut self.spare);
         let wheel = core::mem::take(&mut self.wheel);
         FrameInput {
@@ -253,7 +267,7 @@ impl Default for Win32InputAdapter {
 
 pub struct FrameInput {
     mouse_pos: [f32; 2],
-    mouse_down: [bool; 3],
+    mouse_down: [bool; 5],
     wheel: f32,
     viewport: [f32; 2],
     keys: Vec<KeyEvent>,
@@ -293,7 +307,12 @@ mod tests {
         assert_eq!(WM_MBUTTONUP, 0x0208);
         assert_eq!(WM_MBUTTONDBLCLK, 0x0209);
         assert_eq!(WM_MOUSEWHEEL, 0x020A);
+        assert_eq!(WM_XBUTTONDOWN, 0x020B);
+        assert_eq!(WM_XBUTTONUP, 0x020C);
+        assert_eq!(WM_XBUTTONDBLCLK, 0x020D);
         assert_eq!(WM_SIZE, 0x0005);
+        assert_eq!(XBUTTON1, 0x0001);
+        assert_eq!(XBUTTON2, 0x0002);
         assert_eq!(WHEEL_DELTA, 120);
         assert_eq!(VK_BACK, 0x08);
         assert_eq!(VK_TAB, 0x09);
@@ -306,7 +325,9 @@ mod tests {
         assert_eq!(VK_END, 0x23);
         assert_eq!(VK_HOME, 0x24);
         assert_eq!(VK_LEFT, 0x25);
+        assert_eq!(VK_UP, 0x26);
         assert_eq!(VK_RIGHT, 0x27);
+        assert_eq!(VK_DOWN, 0x28);
         assert_eq!(VK_INSERT, 0x2D);
         assert_eq!(VK_DELETE, 0x2E);
         assert_eq!(VK_LSHIFT, 0xA0);
@@ -317,7 +338,7 @@ mod tests {
         assert_eq!(VK_RMENU, 0xA5);
     }
 
-    const ALL_KEYS: [(u16, Key); 62] = [
+    const ALL_KEYS: [(u16, Key); 64] = [
         (0x08, Key::Backspace),
         (0x2E, Key::Delete),
         (0x25, Key::Left),
@@ -380,6 +401,8 @@ mod tests {
         (0xA0, Key::Shift),
         (0xA2, Key::Ctrl),
         (0xA4, Key::Alt),
+        (0x26, Key::Up),
+        (0x28, Key::Down),
     ];
 
     #[test]
@@ -404,7 +427,7 @@ mod tests {
 
     #[test]
     fn unmapped_vk_codes_are_ignored() {
-        for vk in [0x26u16, 0x28, 0xC0, 0x5D, 0x00, 0xFF] {
+        for vk in [0xC0u16, 0x5D, 0x00, 0xFF] {
             assert_eq!(vk_to_key(vk), None, "VK {vk:#04X} must stay unmapped");
             let mut adapter = Win32InputAdapter::new();
             assert!(adapter.handle_message(WM_KEYDOWN, vk as usize, 0));
@@ -455,16 +478,38 @@ mod tests {
         assert!(adapter.handle_message(WM_LBUTTONDOWN, 0, 0));
         assert!(adapter.handle_message(WM_RBUTTONDOWN, 0, 0));
         assert!(adapter.handle_message(WM_MBUTTONDOWN, 0, 0));
-        assert_eq!(adapter.mouse_down, [true, true, true]);
+        assert_eq!(adapter.mouse_down, [true, true, true, false, false]);
         assert!(adapter.handle_message(WM_RBUTTONUP, 0, 0));
-        assert_eq!(adapter.mouse_down, [true, false, true]);
+        assert_eq!(adapter.mouse_down, [true, false, true, false, false]);
         assert!(adapter.handle_message(WM_LBUTTONUP, 0, 0));
         assert!(adapter.handle_message(WM_LBUTTONDBLCLK, 0, 0));
-        assert_eq!(adapter.mouse_down, [true, false, true]);
+        assert_eq!(adapter.mouse_down, [true, false, true, false, false]);
         assert!(adapter.handle_message(WM_MBUTTONUP, 0, 0));
-        assert_eq!(adapter.mouse_down, [true, false, false]);
+        assert_eq!(adapter.mouse_down, [true, false, false, false, false]);
         assert!(adapter.handle_message(WM_LBUTTONUP, 0, 0));
-        assert_eq!(adapter.mouse_down, [false, false, false]);
+        assert_eq!(adapter.mouse_down, [false, false, false, false, false]);
+    }
+
+    #[test]
+    fn xbutton_messages_map_the_hiword_to_the_back_forward_indices() {
+        let mut adapter = Win32InputAdapter::new();
+        assert!(adapter.handle_message(WM_XBUTTONDOWN, (XBUTTON1 as usize) << 16, 0));
+        assert_eq!(adapter.mouse_down, [false, false, false, true, false]);
+        assert!(adapter.handle_message(WM_XBUTTONDOWN, (XBUTTON2 as usize) << 16, 0));
+        assert_eq!(adapter.mouse_down, [false, false, false, true, true]);
+        assert!(adapter.handle_message(WM_XBUTTONUP, (XBUTTON1 as usize) << 16, 0));
+        assert_eq!(adapter.mouse_down, [false, false, false, false, true]);
+        assert!(adapter.handle_message(WM_XBUTTONUP, (XBUTTON2 as usize) << 16, 0));
+        assert!(adapter.handle_message(WM_XBUTTONDBLCLK, (XBUTTON2 as usize) << 16, 0));
+        assert_eq!(adapter.mouse_down, [false, false, false, false, true]);
+    }
+
+    #[test]
+    fn an_unknown_xbutton_hiword_is_ignored() {
+        let mut adapter = Win32InputAdapter::new();
+        assert!(!adapter.handle_message(WM_XBUTTONDOWN, 0x0003usize << 16, 0));
+        assert!(!adapter.handle_message(WM_XBUTTONUP, 0x0003usize << 16, 0));
+        assert_eq!(adapter.mouse_down, [false; 5]);
     }
 
     #[test]
@@ -512,10 +557,10 @@ mod tests {
         adapter.handle_message(WM_KEYDOWN, VK_A as usize, 0);
         adapter.handle_message(WM_CHAR, 'x' as usize, 0);
         adapter.clear_held();
-        assert_eq!(adapter.mouse_down, [false; 3]);
+        assert_eq!(adapter.mouse_down, [false; 5]);
         let frame = adapter.begin_frame();
         assert!(frame.keys.is_empty());
-        assert_eq!(frame.input_state().mouse_down, [false; 3]);
+        assert_eq!(frame.input_state().mouse_down, [false; 5]);
     }
 
     #[test]
@@ -573,7 +618,7 @@ mod tests {
         let frame = adapter.begin_frame();
         let input = frame.input_state();
         assert_eq!(input.mouse_pos, [100.0, 200.0]);
-        assert_eq!(input.mouse_down, [true, false, false]);
+        assert_eq!(input.mouse_down, [true, false, false, false, false]);
         assert_eq!(input.mouse_wheel, 1.0);
         assert_eq!(input.keys, [KeyEvent::Press(Key::G)]);
         assert_eq!(input.viewport_size, [0.0, 0.0]);
@@ -593,7 +638,7 @@ mod tests {
         let frame = adapter.begin_frame();
         let input = frame.input_state();
         assert_eq!(input.mouse_pos, [0.0, 0.0]);
-        assert_eq!(input.mouse_down, [false; 3]);
+        assert_eq!(input.mouse_down, [false; 5]);
         assert_eq!(input.mouse_wheel, 0.0);
         assert!(input.keys.is_empty());
         assert_eq!(input.viewport_size, [0.0, 0.0]);
@@ -602,7 +647,7 @@ mod tests {
     #[test]
     fn default_matches_new() {
         let adapter = Win32InputAdapter::default();
-        assert_eq!(adapter.mouse_down, [false; 3]);
+        assert_eq!(adapter.mouse_down, [false; 5]);
         assert_eq!(adapter.viewport(), None);
     }
 }

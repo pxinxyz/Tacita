@@ -1,4 +1,3 @@
-// HSV->RGB, the hexagon dance every GUI reimplements because linking a color library for 40 lines felt excessive.
 pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let h = wrap_hue(h);
     let s = clamp01(s);

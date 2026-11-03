@@ -7,3 +7,6 @@ description = "A no_std immediate-mode GUI library that emits draw lists; no win
 
 [dependencies]
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
+unicode-segmentation = { version = "1.13", default-features = false }
+unicode-bidi = { version = "0.3.18", default-features = false, features = ["hardcoded-data"] }
+rustybuzz = { version = "0.20.1", default-features = false }

@@ -1,5 +1,23 @@
+mod containers;
+mod extensions;
+#[cfg(test)]
+#[path = "layout/extensions_tests.rs"]
+mod extensions_tests;
+pub use extensions::{
+    resolve_layout_extended, resolve_layout_extended_with, ContentAlign, GridCell, LayoutOptions,
+    GRID_AUTO,
+};
+mod solver;
+pub use containers::{LayoutItemScope, LayoutScope};
+pub use solver::{
+    resolve_layout, resolve_layout_with, LayoutAlign, LayoutError, LayoutGeometry, LayoutItem,
+    LayoutJustify, LayoutKind, LayoutSpec, MAX_LAYOUT_ITEMS,
+};
+#[cfg(test)]
+#[path = "layout/tests.rs"]
+mod container_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-// The layout engine: a cursor that walks downward and occasionally sideways. Immediate mode means recomputing the entire universe 144 times a second, so the universe is one guy with a pen.
 pub(crate) struct Cursor {
     line_start_x: f32,
     content_right: f32,
@@ -48,6 +66,10 @@ impl Cursor {
         self.pos[1]
     }
 
+    pub(crate) fn position(&self) -> [f32; 2] {
+        self.pos
+    }
+
     pub(crate) fn available_width(&self) -> f32 {
         self.content_right - self.pos[0]
     }
@@ -66,6 +88,18 @@ impl Cursor {
             pos[1] + self.line_height + self.spacing[1],
         ];
         [pos[0], pos[1], self.last_item_right, pos[1] + item_size[1]]
+    }
+
+    pub(crate) fn skip_rows(&mut self, count: usize, item_size: [f32; 2]) {
+        if count == 0 {
+            return;
+        }
+        let stride = item_size[1] + self.spacing[1];
+        self.last_line_y = self.pos[1] + (count - 1) as f32 * stride;
+        self.pos = [self.line_start_x, self.pos[1] + count as f32 * stride];
+        self.line_height = item_size[1];
+        self.last_item_right = self.line_start_x + item_size[0];
+        self.has_last_item = true;
     }
 
     pub(crate) fn same_line(&mut self) {
@@ -92,6 +126,17 @@ impl Cursor {
     pub(crate) fn unindent(&mut self, amount: f32) {
         self.line_start_x -= amount;
         self.pos[0] -= amount;
+    }
+
+    pub(crate) fn collapse_from(&mut self, saved: Self, height: f32) {
+        *self = saved;
+        if height > 0.0 {
+            self.last_line_y = self.pos[1];
+            self.line_height = (height - self.spacing[1]).max(0.0);
+            self.pos[1] += height;
+            self.last_item_right = self.line_start_x;
+            self.has_last_item = true;
+        }
     }
 }
 
@@ -120,6 +165,18 @@ mod tests {
 
         let r2 = c.advance([70.0, 16.0]);
         assert_eq!(r2, [110.0, 98.0, 180.0, 114.0]);
+    }
+
+    #[test]
+    fn skipped_rows_match_repeated_vertical_advances() {
+        let mut expected = cursor();
+        let mut actual = cursor();
+        for _ in 0..100 {
+            expected.advance([50.0, 20.0]);
+        }
+        actual.skip_rows(100, [50.0, 20.0]);
+        assert_eq!(actual, expected);
+        assert_eq!(actual.advance([10.0, 5.0]), expected.advance([10.0, 5.0]));
     }
 
     #[test]

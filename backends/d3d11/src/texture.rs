@@ -24,13 +24,18 @@ fn create_texture(
     width: u32,
     height: u32,
     usage: D3D11_USAGE,
+    encoding: crate::TextureEncoding,
 ) -> Result<Texture, BackendError> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
         MipLevels: 1,
         ArraySize: 1,
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        Format: if encoding == crate::TextureEncoding::Srgb {
+            windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        } else {
+            DXGI_FORMAT_R8G8B8A8_UNORM
+        },
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -76,15 +81,89 @@ pub(crate) struct TextureSet {
 }
 
 impl TextureSet {
+    pub(crate) fn resource_for(&self, id: TextureId) -> Option<&ID3D11Texture2D> {
+        if id.0 < 2 {
+            Some(&self.atlas.texture)
+        } else {
+            self.host.get(&id.0).map(|t| &t.texture)
+        }
+    }
+    pub(crate) fn size_for(&self, id: TextureId) -> Option<[u32; 2]> {
+        let t = if id.0 < 2 {
+            &self.atlas
+        } else {
+            self.host.get(&id.0)?
+        };
+        Some([t.width, t.height])
+    }
+    pub(crate) fn add_gpu_texture(
+        &mut self,
+        device: &ID3D11Device,
+        id: TextureId,
+        texture: &ID3D11Texture2D,
+    ) -> Result<(), BackendError> {
+        if id.0 < 2 {
+            return Err(BackendError::ReservedTextureId(id.0));
+        }
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe {
+            texture.GetDesc(&mut desc);
+        }
+        if desc.Width == 0
+            || desc.Height == 0
+            || desc.SampleDesc.Count != 1
+            || desc.ArraySize != 1
+            || desc.MipLevels != 1
+            || desc.BindFlags & D3D11_BIND_SHADER_RESOURCE.0 as u32 == 0
+            || !matches!(
+                desc.Format,
+                DXGI_FORMAT_R8G8B8A8_UNORM
+                    | windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM
+                    | windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+                    | windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+            )
+        {
+            return Err(BackendError::InvalidTextureData(
+                "GPU texture must be sampleable single-mip RGBA8/BGRA8 UNORM".into(),
+            ));
+        }
+        let owner: ID3D11Device =
+            unsafe { texture.GetDevice() }.map_err(BackendError::TextureCreation)?;
+        if owner != *device {
+            return Err(BackendError::InvalidTextureData(
+                "GPU texture belongs to another device".into(),
+            ));
+        }
+        let mut srv = None;
+        unsafe { device.CreateShaderResourceView(texture, None, Some(&mut srv)) }
+            .map_err(|e| BackendError::StateCreation("GPU texture SRV", e))?;
+        self.host.insert(
+            id.0,
+            Texture {
+                texture: texture.clone(),
+                srv: crate::compositor::required(srv)?,
+                width: desc.Width,
+                height: desc.Height,
+            },
+        );
+        Ok(())
+    }
+
     pub(crate) fn new(device: &ID3D11Device) -> Result<Self, BackendError> {
-        let atlas = create_texture(device, &[255, 255, 255, 255], 1, 1, D3D11_USAGE_DEFAULT)?;
+        let atlas = create_texture(
+            device,
+            &[255, 255, 255, 255],
+            1,
+            1,
+            D3D11_USAGE_DEFAULT,
+            crate::TextureEncoding::Linear,
+        )?;
         Ok(Self {
             atlas,
             host: HashMap::new(),
         })
     }
 
-    // Atlas re-upload happens only when the generation counter bumps. Blindly re-uploading every frame is how you benchmark 12 FPS and wonder why.
     pub(crate) fn upload_atlas(
         &mut self,
         device: &ID3D11Device,
@@ -117,7 +196,14 @@ impl TextureSet {
                 );
             }
         } else {
-            self.atlas = create_texture(device, &rgba, width, height, D3D11_USAGE_DEFAULT)?;
+            self.atlas = create_texture(
+                device,
+                &rgba,
+                width,
+                height,
+                D3D11_USAGE_DEFAULT,
+                crate::TextureEncoding::Linear,
+            )?;
         }
         Ok(())
     }
@@ -130,6 +216,24 @@ impl TextureSet {
         width: u32,
         height: u32,
     ) -> Result<(), BackendError> {
+        self.add_host_texture_encoded(
+            device,
+            id,
+            rgba,
+            width,
+            height,
+            crate::TextureEncoding::Linear,
+        )
+    }
+    pub(crate) fn add_host_texture_encoded(
+        &mut self,
+        device: &ID3D11Device,
+        id: TextureId,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        encoding: crate::TextureEncoding,
+    ) -> Result<(), BackendError> {
         if id == TextureId::FONT || id == TextureId::WHITE {
             return Err(BackendError::ReservedTextureId(id.0));
         }
@@ -141,7 +245,7 @@ impl TextureSet {
                 rgba.len()
             )));
         }
-        let texture = create_texture(device, rgba, width, height, D3D11_USAGE_IMMUTABLE)?;
+        let texture = create_texture(device, rgba, width, height, D3D11_USAGE_IMMUTABLE, encoding)?;
         self.host.insert(id.0, texture);
         Ok(())
     }

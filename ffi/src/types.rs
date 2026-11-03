@@ -1,4 +1,7 @@
+use restricted_gui::drag_drop::DragPayload;
 use restricted_gui::input::{KeyBinding, Modifiers};
+use restricted_gui::ScrollFlags;
+use restricted_gui::{ScrollbarSkin, ScrollbarTrackClick};
 
 use crate::{key_from_code, key_to_code};
 
@@ -78,6 +81,82 @@ impl From<[u8; 4]> for GuiColor {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct GuiScrollbarSkin {
+    pub track_inset: f32,
+    pub thumb_inset: f32,
+    pub track_rounding: f32,
+    pub thumb_rounding: f32,
+    pub min_thumb: f32,
+    pub track_click: u32,
+}
+
+impl GuiScrollbarSkin {
+    pub(crate) fn decode(self) -> Option<ScrollbarSkin> {
+        let values = [
+            self.track_inset,
+            self.thumb_inset,
+            self.track_rounding,
+            self.thumb_rounding,
+            self.min_thumb,
+        ];
+        if values.iter().any(|v| !v.is_finite())
+            || self.track_inset < 0.0
+            || self.thumb_inset < 0.0
+            || self.track_rounding < 0.0
+            || self.thumb_rounding < -1.0
+            || self.min_thumb <= 0.0
+        {
+            return None;
+        }
+        let track_click = match self.track_click {
+            0 => ScrollbarTrackClick::Jump,
+            1 => ScrollbarTrackClick::Page,
+            _ => return None,
+        };
+        Some(ScrollbarSkin {
+            track_inset: self.track_inset,
+            thumb_inset: self.thumb_inset,
+            track_rounding: self.track_rounding,
+            thumb_rounding: self.thumb_rounding,
+            min_thumb: self.min_thumb,
+            track_click,
+        })
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GuiDragPayload {
+    pub type_id: u64,
+    pub len: u8,
+    pub bytes: [u8; 32],
+}
+
+impl GuiDragPayload {
+    pub(crate) fn decode(self) -> Option<DragPayload> {
+        if self.len > 32 {
+            return None;
+        }
+        Some(DragPayload {
+            type_id: self.type_id,
+            len: self.len,
+            bytes: self.bytes,
+        })
+    }
+}
+
+impl From<DragPayload> for GuiDragPayload {
+    fn from(payload: DragPayload) -> Self {
+        Self {
+            type_id: payload.type_id,
+            len: payload.len,
+            bytes: payload.bytes,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct GuiStr {
     pub ptr: *const u8,
     pub len: usize,
@@ -92,6 +171,22 @@ impl GuiStr {
     }
 }
 
+pub const GUI_SCROLL_NONE: u32 = 0;
+pub const GUI_SCROLL_SCROLLABLE: u32 = 1 << 0;
+pub const GUI_SCROLL_SCROLLBAR: u32 = 1 << 1;
+
+const GUI_SCROLL_KNOWN_BITS: u32 = GUI_SCROLL_SCROLLABLE | GUI_SCROLL_SCROLLBAR;
+
+pub(crate) fn scroll_flags_from_bits(bits: u32) -> Option<ScrollFlags> {
+    if bits & !GUI_SCROLL_KNOWN_BITS != 0 {
+        return None;
+    }
+    Some(ScrollFlags {
+        scrollable: bits & GUI_SCROLL_SCROLLABLE != 0,
+        scrollbar: bits & GUI_SCROLL_SCROLLBAR != 0,
+    })
+}
+
 pub const GUI_KEY_BINDING_NONE: u8 = 0;
 pub const GUI_KEY_BINDING_KEY: u8 = 1;
 pub const GUI_KEY_BINDING_MOUSE: u8 = 2;
@@ -99,7 +194,6 @@ pub const GUI_KEY_BINDING_CHORD: u8 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-// ctrl/shift/alt are u8 on the wire. 0xFF means "held". 0x42 also means "held". A test feeds this garbage on purpose, for fun and profit.
 pub struct GuiKeyBinding {
     pub tag: u8,
     pub key: u16,
@@ -123,7 +217,7 @@ impl GuiKeyBinding {
         match self.tag {
             GUI_KEY_BINDING_NONE => Some(KeyBinding::None),
             GUI_KEY_BINDING_KEY => key_from_code(self.key).map(KeyBinding::Key),
-            GUI_KEY_BINDING_MOUSE if self.mouse_button < 3 => {
+            GUI_KEY_BINDING_MOUSE if self.mouse_button < 5 => {
                 Some(KeyBinding::Mouse(self.mouse_button))
             }
             GUI_KEY_BINDING_CHORD => key_from_code(self.key).map(|key| KeyBinding::Chord {
@@ -170,6 +264,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn drag_payload_and_scrollbar_skin_reject_invalid_wire_values() {
+        let mut payload = GuiDragPayload {
+            type_id: 1,
+            len: 32,
+            bytes: [0; 32],
+        };
+        assert!(payload.decode().is_some());
+        payload.len = 33;
+        assert!(payload.decode().is_none());
+
+        let mut skin = GuiScrollbarSkin {
+            track_inset: 2.0,
+            thumb_inset: 3.0,
+            track_rounding: 2.0,
+            thumb_rounding: -1.0,
+            min_thumb: 18.0,
+            track_click: 1,
+        };
+        assert_eq!(
+            skin.decode().unwrap().track_click,
+            ScrollbarTrackClick::Page
+        );
+        skin.track_click = 2;
+        assert!(skin.decode().is_none());
+        skin.track_click = 0;
+        skin.min_thumb = f32::NAN;
+        assert!(skin.decode().is_none());
+    }
+
+    #[test]
     fn gui_vec2_and_gui_color_convert_both_ways() {
         let v = GuiVec2 { x: 1.5, y: -2.5 };
         let arr: [f32; 2] = v.into();
@@ -203,6 +327,7 @@ mod tests {
             KeyBinding::None,
             KeyBinding::Key(Key::F),
             KeyBinding::Mouse(2),
+            KeyBinding::Mouse(4),
             KeyBinding::Chord {
                 modifiers: Modifiers {
                     shift: true,
@@ -281,7 +406,7 @@ mod tests {
         assert_eq!(bad_tag.to_binding(), None);
         let bad_key = GuiKeyBinding {
             tag: GUI_KEY_BINDING_KEY,
-            key: 62,
+            key: 64,
             ..GuiKeyBinding::NONE
         };
         assert_eq!(bad_key.to_binding(), None);
@@ -295,8 +420,47 @@ mod tests {
     }
 
     #[test]
+    fn scroll_flag_masks_decode_to_the_core_constants() {
+        assert_eq!(
+            scroll_flags_from_bits(GUI_SCROLL_NONE),
+            Some(ScrollFlags::NONE)
+        );
+        assert_eq!(
+            scroll_flags_from_bits(GUI_SCROLL_SCROLLABLE),
+            Some(ScrollFlags::WHEEL)
+        );
+        assert_eq!(
+            scroll_flags_from_bits(GUI_SCROLL_SCROLLABLE | GUI_SCROLL_SCROLLBAR),
+            Some(ScrollFlags::BAR)
+        );
+    }
+
+    #[test]
+    fn scrollbar_without_scrollable_is_accepted_and_inert() {
+        let flags = scroll_flags_from_bits(GUI_SCROLL_SCROLLBAR).expect("accepted, not an error");
+        assert!(!flags.scrollable);
+        assert!(flags.scrollbar);
+    }
+
+    #[test]
+    fn unknown_scroll_flag_bits_are_rejected() {
+        for bits in [
+            1u32 << 2,
+            1 << 31,
+            0xFFFF_FFFF,
+            GUI_SCROLL_SCROLLABLE | (1 << 5),
+        ] {
+            assert_eq!(
+                scroll_flags_from_bits(bits),
+                None,
+                "{bits:#x} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn mouse_button_index_is_validated() {
-        for button in 0..3u8 {
+        for button in 0..5u8 {
             let gui = GuiKeyBinding {
                 tag: GUI_KEY_BINDING_MOUSE,
                 mouse_button: button,
@@ -304,7 +468,7 @@ mod tests {
             };
             assert_eq!(gui.to_binding(), Some(KeyBinding::Mouse(button)));
         }
-        for button in [3u8, 200, u8::MAX] {
+        for button in [5u8, 200, u8::MAX] {
             let gui = GuiKeyBinding {
                 tag: GUI_KEY_BINDING_MOUSE,
                 mouse_button: button,

@@ -20,7 +20,6 @@ pub(crate) fn rasterize_ring(radius: f32, thickness: f32) -> (u32, u32, Vec<u8>)
     (0, 0, Vec::new())
 }
 
-// Exact pixel coverage via signed-area accumulation -- AGG/FreeType lineage. It works, don't ask. The 2005 PhD thesis asks for you.
 fn rasterize_annulus(r_out: f64, r_in: f64) -> (u32, u32, Vec<u8>) {
     let diameter = 2.0 * r_out;
     if diameter + 2.0 > u32::MAX as f64 {
@@ -203,7 +202,7 @@ fn sqrt_f64(x: f64) -> f64 {
 }
 
 #[allow(clippy::approx_constant)]
-fn atan_unit(x: f64) -> f64 {
+pub(crate) fn atan_unit(x: f64) -> f64 {
     const ATAN_HI: [f64; 2] = [4.636_476_090_008_061e-1, 7.853_981_633_974_483e-1];
     const ATAN_LO: [f64; 2] = [2.269_877_745_296_168_7e-17, 3.061_616_997_868_383e-17];
     const P: [f64; 11] = [

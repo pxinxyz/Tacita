@@ -1,3 +1,8 @@
+# D3D11 backend for `restricted-gui` (std crate, Windows-only).
+#
+# Sibling of `core`/`sdk` — the backend consumes core `DrawData` and never
+# touches widget logic; the dependency arrow points backend -> core only.
+# The host owns the device/context/swapchain; this crate owns no window.
 
 [package]
 name = "restricted-gui-d3d11"
@@ -6,21 +11,30 @@ edition = "2021"
 publish = false
 
 [dependencies]
+# The backend consumes core DrawData; the dependency arrow points
+# backend -> core only, never the reverse.
 restricted-gui = { path = "../../core" }
+# Pinned at scaffold time (2026-07-23). Exact resolved version: see Cargo.lock.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    # D3DCompile for runtime shader compilation (d3dcompiler_47.dll).
     "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
 ] }
 
 [dev-dependencies]
+# Extra Win32 surface for examples/overlay_d3d11.rs only (window + message loop,
+# WNDCLASSW's GDI handle types). The library itself needs none of this.
 windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The example dogfoods the Win32 input adapter (message → InputState
+# translation); the library itself stays renderer-only.
 restricted-gui-win32 = { path = "../../adapters/win32" }
+png = "0.17"

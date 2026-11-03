@@ -3,22 +3,68 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
 use restricted_gui::context::Context;
+mod host_services;
+pub use host_services::*;
+#[path = "../../host/src/accessibility/mod.rs"]
+pub mod accessibility_host;
+use restricted_gui::font::FontId;
 use restricted_gui::input::{InputState, Key, KeyEvent};
-use restricted_gui::ui::{CollapsingHeaderScope, ScrollRegionScope};
+use restricted_gui::panels::{
+    DockPanelScope, DockspaceScope, PanelCellScope, ResizableChildScope, SplitScope, TableScope,
+};
+use restricted_gui::ui::{ChildScope, CollapsingHeaderScope, DisabledScope, TreeNodeScope};
 
+mod animation;
 mod canvas;
+#[path = "../../host/src/clipboard.rs"]
+mod clipboard;
 mod custom;
+mod data;
+mod data_editors;
+mod diagnostics;
+mod editing;
+mod effects;
+mod images;
+mod layout;
+mod panels;
+mod paths;
+mod rendering;
+mod shapes;
+mod svg;
+mod text;
+mod text_raster;
+mod theme;
+pub use data::*;
+pub use data_editors::*;
+pub use editing::*;
+mod input_state;
+#[path = "../../host/src/style_watch.rs"]
+pub mod style_watch;
 mod types;
 mod widgets;
 mod windows;
+pub use input_state::*;
 
 #[cfg(test)]
 mod header_consistency;
 #[cfg(test)]
 mod test_support;
 
+pub use animation::*;
 pub use canvas::*;
 pub use custom::*;
+pub use diagnostics::*;
+pub use effects::*;
+pub use images::*;
+pub use layout::*;
+pub use panels::*;
+pub use paths::*;
+pub use rendering::*;
+pub use shapes::*;
+pub use svg::*;
+pub use text::*;
+pub use text_raster::*;
+pub use theme::*;
 pub use types::*;
 pub use widgets::*;
 pub use windows::*;
@@ -58,6 +104,7 @@ pub struct GuiVert {
 pub struct GuiCmd {
     pub elem_count: u32,
     pub clip_rect: [f32; 4],
+    pub effects: u32,
     pub texture: u64,
 }
 
@@ -87,6 +134,8 @@ pub const GUI_KEY_EVENT_PRESS: u8 = 0;
 pub const GUI_KEY_EVENT_RELEASE: u8 = 1;
 pub const GUI_KEY_EVENT_CHAR: u8 = 2;
 
+pub const GUI_FONT_ID_INVALID: u32 = u32::MAX;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GuiKeyEvent {
@@ -99,15 +148,14 @@ pub struct GuiKeyEvent {
 #[derive(Debug, Clone, Copy)]
 pub struct GuiInput {
     pub mouse_pos: [f32; 2],
-    // u8, not bool: the host bulk-fills this struct and uninitialized bytes are a lifestyle. Any nonzero byte is "held". The bool-materialization UB goblin stays in its cage.
-    pub mouse_down: [u8; 3],
+    pub mouse_down: [u8; 5],
     pub mouse_wheel: f32,
     pub viewport_size: [f32; 2],
     pub keys: *const GuiKeyEvent,
     pub key_count: usize,
 }
 
-const ALL_KEYS: [Key; 62] = [
+const ALL_KEYS: [Key; 64] = [
     Key::Backspace,
     Key::Delete,
     Key::Left,
@@ -170,6 +218,8 @@ const ALL_KEYS: [Key; 62] = [
     Key::Shift,
     Key::Ctrl,
     Key::Alt,
+    Key::Up,
+    Key::Down,
 ];
 
 pub(crate) fn key_to_code(key: Key) -> u16 {
@@ -236,6 +286,8 @@ pub(crate) fn key_to_code(key: Key) -> u16 {
         Key::Shift => 59,
         Key::Ctrl => 60,
         Key::Alt => 61,
+        Key::Up => 62,
+        Key::Down => 63,
     }
 }
 
@@ -252,7 +304,6 @@ fn translate_key_event(event: &GuiKeyEvent) -> Option<KeyEvent> {
     }
 }
 
-// catch_unwind around every export: panics never cross the FFI boundary. What happens in Rust stays in Rust.
 macro_rules! gui_export {
     ($body:expr, $fallback:expr) => {{
         $crate::set_last_error($crate::GuiErrorCode::None);
@@ -268,14 +319,23 @@ macro_rules! gui_export {
 pub(crate) use gui_export;
 
 pub(crate) unsafe fn str_arg<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+    let bytes = unsafe { slice_arg(ptr, len) }?;
+    std::str::from_utf8(bytes).ok()
+}
+
+pub(crate) unsafe fn slice_arg<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if len == 0 {
-        return Some("");
+        return Some(&[]);
     }
-    if ptr.is_null() {
+    let element_size = std::mem::size_of::<T>();
+    if ptr.is_null() || element_size == 0 || !ptr.is_aligned() {
         return None;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-    std::str::from_utf8(bytes).ok()
+    let byte_len = len.checked_mul(element_size)?;
+    if byte_len > isize::MAX as usize || (ptr as usize).checked_add(byte_len).is_none() {
+        return None;
+    }
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
 pub(crate) unsafe fn active_frame_ctx<'a>(ctx: *mut GuiContext) -> Option<&'a mut GuiContext> {
@@ -293,13 +353,119 @@ pub(crate) unsafe fn active_frame_ctx<'a>(ctx: *mut GuiContext) -> Option<&'a mu
 
 pub struct GuiContext {
     pub(crate) ctx: Context,
+    pub(crate) state: input_state::StateBridge,
     pub(crate) frame_active: bool,
     last_draw: GuiDrawData,
+    last_effects: *const GuiDrawEffects,
+    last_effect_count: usize,
     commands_staging: Vec<GuiCmd>,
+    key_events_staging: Vec<KeyEvent>,
+    pub(crate) text_input_staging: String,
     pub(crate) window: WindowState,
-    pub(crate) header_scopes: Vec<Option<CollapsingHeaderScope>>,
-    pub(crate) scroll_scopes: Vec<ScrollRegionScope>,
-    pub(crate) tab_bar_depth: usize,
+    pub(crate) containers: Vec<ContainerScope>,
+    pub(crate) font_scope_depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContainerKind {
+    Rows,
+    DataTable,
+    DataCell,
+    MenuBar,
+    PropertyGrid,
+    PropertyRow,
+    DataMenu,
+
+    Stencil,
+    Mask,
+    RoundedClip,
+    Layout,
+    LayoutItem,
+    AnimatedLayout,
+    Header,
+    Tree,
+    ScrollRegion,
+    Child,
+    GroupBox,
+    PreviewCanvas,
+    Disabled,
+    TabBar,
+    Popup,
+    Table,
+    Split,
+    PanelCell,
+    ResizableChild,
+    Dockspace,
+    DockPanel,
+}
+
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum ContainerScope {
+    Rows(restricted_gui::data::RowClipperScope),
+    DataTable(restricted_gui::data::DataTableScope),
+    DataCell(restricted_gui::data::DataCellScope),
+    MenuBar(restricted_gui::data::MenuBarScope),
+    PropertyGrid(restricted_gui::data::PropertyGridScope),
+    PropertyRow(restricted_gui::data::DataCellScope),
+    DataMenu,
+
+    Stencil(restricted_gui::effects::StencilScope),
+    Mask(restricted_gui::effects::MaskScope),
+    RoundedClip(restricted_gui::shapes::RoundedClipScope),
+    Layout(restricted_gui::layout::LayoutScope),
+    LayoutItem(restricted_gui::layout::LayoutItemScope),
+    AnimatedLayout(restricted_gui::animation::AnimatedLayoutScope),
+    Header(Option<CollapsingHeaderScope>),
+    Tree(Option<TreeNodeScope>),
+    ScrollRegion(ChildScope),
+    Child(ChildScope),
+    GroupBox(ChildScope),
+    PreviewCanvas(ChildScope),
+    Disabled(DisabledScope),
+    TabBar,
+    Popup(bool),
+    Table(TableScope),
+    Split(SplitScope),
+    PanelCell(PanelCellScope),
+    ResizableChild(ResizableChildScope),
+    Dockspace(DockspaceScope),
+    DockPanel(DockPanelScope),
+}
+
+impl ContainerScope {
+    pub(crate) fn kind(&self) -> ContainerKind {
+        match self {
+            Self::Rows(_) => ContainerKind::Rows,
+            Self::DataTable(_) => ContainerKind::DataTable,
+            Self::DataCell(_) => ContainerKind::DataCell,
+            Self::MenuBar(_) => ContainerKind::MenuBar,
+            Self::PropertyGrid(_) => ContainerKind::PropertyGrid,
+            Self::PropertyRow(_) => ContainerKind::PropertyRow,
+            Self::DataMenu => ContainerKind::DataMenu,
+
+            Self::Stencil(_) => ContainerKind::Stencil,
+            Self::Mask(_) => ContainerKind::Mask,
+            Self::RoundedClip(_) => ContainerKind::RoundedClip,
+            Self::Layout(_) => ContainerKind::Layout,
+            Self::LayoutItem(_) => ContainerKind::LayoutItem,
+            Self::AnimatedLayout(_) => ContainerKind::AnimatedLayout,
+            Self::Header(_) => ContainerKind::Header,
+            Self::Tree(_) => ContainerKind::Tree,
+            Self::ScrollRegion(_) => ContainerKind::ScrollRegion,
+            Self::Child(_) => ContainerKind::Child,
+            Self::GroupBox(_) => ContainerKind::GroupBox,
+            Self::PreviewCanvas(_) => ContainerKind::PreviewCanvas,
+            Self::Disabled(_) => ContainerKind::Disabled,
+            Self::TabBar => ContainerKind::TabBar,
+            Self::Popup(_) => ContainerKind::Popup,
+            Self::Table(_) => ContainerKind::Table,
+            Self::Split(_) => ContainerKind::Split,
+            Self::PanelCell(_) => ContainerKind::PanelCell,
+            Self::ResizableChild(_) => ContainerKind::ResizableChild,
+            Self::Dockspace(_) => ContainerKind::Dockspace,
+            Self::DockPanel(_) => ContainerKind::DockPanel,
+        }
+    }
 }
 
 pub(crate) enum WindowState {
@@ -316,17 +482,24 @@ pub unsafe extern "C" fn gui_context_new(font_bytes: *const u8, len: usize) -> *
             set_last_error(GuiErrorCode::InvalidInput);
             return ptr::null_mut();
         }
-        let bytes = unsafe { std::slice::from_raw_parts(font_bytes, len) };
+        let Some(bytes) = (unsafe { slice_arg(font_bytes, len) }) else {
+            set_last_error(GuiErrorCode::InvalidInput);
+            return ptr::null_mut();
+        };
         match Context::new(bytes) {
             Ok(ctx) => Box::into_raw(Box::new(GuiContext {
                 ctx,
+                state: input_state::StateBridge::new(),
                 frame_active: false,
                 last_draw: GuiDrawData::ZERO,
+                last_effects: ptr::null(),
+                last_effect_count: 0,
                 commands_staging: Vec::new(),
+                key_events_staging: Vec::new(),
+                text_input_staging: String::new(),
                 window: WindowState::None,
-                header_scopes: Vec::new(),
-                scroll_scopes: Vec::new(),
-                tab_bar_depth: 0,
+                containers: Vec::new(),
+                font_scope_depth: 0,
             })),
             Err(_) => {
                 set_last_error(GuiErrorCode::InvalidInput);
@@ -362,27 +535,52 @@ pub unsafe extern "C" fn gui_new_frame(ctx: *mut GuiContext, input: *const GuiIn
             set_last_error(GuiErrorCode::InvalidInput);
             return;
         }
-        let gui = unsafe { &mut *ctx };
-        gui.window = WindowState::None;
-        gui.header_scopes.clear();
-        gui.scroll_scopes.clear();
-        gui.tab_bar_depth = 0;
-        let mut key_events: Vec<KeyEvent> = Vec::new();
-        let state = if input.is_null() {
-            InputState::default()
+        let raw = if input.is_null() {
+            None
         } else {
-            let raw = unsafe { &*input };
+            Some(unsafe { &*input })
+        };
+        let events = if let Some(raw) = raw {
             if !raw.keys.is_null() && raw.key_count > 0 {
-                let events = unsafe { std::slice::from_raw_parts(raw.keys, raw.key_count) };
-                key_events.extend(events.iter().filter_map(translate_key_event));
+                let Some(events) = (unsafe { slice_arg(raw.keys, raw.key_count) }) else {
+                    set_last_error(GuiErrorCode::InvalidInput);
+                    return;
+                };
+                events
+            } else {
+                &[]
             }
+        } else {
+            &[]
+        };
+        let gui = unsafe { &mut *ctx };
+        if events.len() > gui.key_events_staging.capacity()
+            && gui
+                .key_events_staging
+                .try_reserve(events.len() - gui.key_events_staging.len())
+                .is_err()
+        {
+            set_last_error(GuiErrorCode::InvalidInput);
+            return;
+        }
+        gui.window = WindowState::None;
+        gui.containers.clear();
+        gui.last_effects = std::ptr::null();
+        gui.last_effect_count = 0;
+        gui.font_scope_depth = 0;
+        gui.key_events_staging.clear();
+        let state = if let Some(raw) = raw {
+            gui.key_events_staging
+                .extend(events.iter().filter_map(translate_key_event));
             InputState {
                 mouse_pos: raw.mouse_pos,
                 mouse_down: raw.mouse_down.map(|b| b != 0),
                 mouse_wheel: raw.mouse_wheel,
-                keys: &key_events,
+                keys: &gui.key_events_staging,
                 viewport_size: raw.viewport_size,
             }
+        } else {
+            InputState::default()
         };
         gui.ctx.set_input(state);
         gui.ctx.new_frame(dt);
@@ -404,27 +602,74 @@ pub unsafe extern "C" fn gui_render(ctx: *mut GuiContext) -> GuiDrawData {
         let gui = unsafe { &mut *ctx };
         if gui.frame_active {
             let unbalanced = !matches!(gui.window, WindowState::None)
-                || !gui.header_scopes.is_empty()
-                || !gui.scroll_scopes.is_empty()
-                || gui.tab_bar_depth > 0;
+                || !gui.containers.is_empty()
+                || gui.font_scope_depth > 0;
             if unbalanced {
-                while gui.tab_bar_depth > 0 {
-                    gui.tab_bar_depth -= 1;
-                    gui.ctx.ui().end_tab_bar();
+                while gui.font_scope_depth > 0 {
+                    gui.font_scope_depth -= 1;
+                    gui.ctx.ui().pop_font();
                 }
                 if matches!(gui.window, WindowState::Open) {
-                    while let Some(scope) = gui.header_scopes.pop() {
-                        if let Some(scope) = scope {
-                            gui.ctx.ui().end_collapsing_header(scope);
+                    while let Some(scope) = gui.containers.pop() {
+                        match scope {
+                            ContainerScope::Rows(token) => gui.ctx.ui().end_rows(token),
+                            ContainerScope::DataTable(token) => {
+                                gui.ctx.ui().end_data_table(token);
+                            }
+                            ContainerScope::DataCell(token) => gui.ctx.ui().end_data_cell(token),
+                            ContainerScope::MenuBar(token) => gui.ctx.ui().end_menu_bar(token),
+                            ContainerScope::PropertyGrid(token) => {
+                                gui.ctx.ui().end_property_grid(token)
+                            }
+                            ContainerScope::PropertyRow(token) => {
+                                gui.ctx.ui().end_property_row(token)
+                            }
+                            ContainerScope::DataMenu => gui.ctx.ui().end_menu(),
+                            ContainerScope::Stencil(token) => gui.ctx.ui().end_stencil_clip(token),
+                            ContainerScope::Mask(token) => gui.ctx.ui().end_mask(token),
+                            ContainerScope::RoundedClip(token) => {
+                                gui.ctx.ui().end_rounded_clip(token)
+                            }
+                            ContainerScope::Layout(token) => gui.ctx.ui().end_layout(token),
+                            ContainerScope::LayoutItem(token) => {
+                                if let Some(ContainerScope::Layout(parent)) =
+                                    gui.containers.last_mut()
+                                {
+                                    gui.ctx.ui().end_layout_item(parent, token);
+                                }
+                            }
+                            ContainerScope::AnimatedLayout(token) => {
+                                gui.ctx.ui().end_animated_layout(token)
+                            }
+                            ContainerScope::Header(Some(token)) => {
+                                gui.ctx.ui().end_collapsing_header(token)
+                            }
+                            ContainerScope::Tree(Some(token)) => gui.ctx.ui().end_tree_node(token),
+                            ContainerScope::ScrollRegion(token) | ContainerScope::Child(token) => {
+                                gui.ctx.ui().end_child(token)
+                            }
+                            ContainerScope::GroupBox(token) => gui.ctx.ui().end_group_box(token),
+                            ContainerScope::PreviewCanvas(token) => {
+                                gui.ctx.ui().end_preview_canvas(token)
+                            }
+                            ContainerScope::Disabled(token) => gui.ctx.ui().end_disabled(token),
+                            ContainerScope::TabBar => gui.ctx.ui().end_tab_bar(),
+                            ContainerScope::Table(token) => gui.ctx.ui().end_table(token),
+                            ContainerScope::Split(token) => gui.ctx.ui().end_split(token),
+                            ContainerScope::PanelCell(token) => gui.ctx.ui().end_panel_cell(token),
+                            ContainerScope::ResizableChild(token) => {
+                                gui.ctx.ui().end_resizable_child(token)
+                            }
+                            ContainerScope::Dockspace(token) => gui.ctx.ui().end_dockspace(token),
+                            ContainerScope::DockPanel(token) => gui.ctx.ui().end_dock_panel(token),
+                            ContainerScope::Popup(true) => gui.ctx.ui().end_popup(),
+                            ContainerScope::Popup(false) => {}
+                            ContainerScope::Header(None) | ContainerScope::Tree(None) => {}
                         }
-                    }
-                    while let Some(scope) = gui.scroll_scopes.pop() {
-                        gui.ctx.ui().end_scroll_region(scope);
                     }
                     gui.ctx.ui().end_window();
                 } else {
-                    gui.header_scopes.clear();
-                    gui.scroll_scopes.clear();
+                    gui.containers.clear();
                 }
                 gui.window = WindowState::None;
             }
@@ -435,6 +680,7 @@ pub unsafe extern "C" fn gui_render(ctx: *mut GuiContext) -> GuiDrawData {
                 .extend(data.commands.iter().map(|cmd| GuiCmd {
                     elem_count: cmd.elem_count,
                     clip_rect: cmd.clip_rect,
+                    effects: cmd.effects,
                     texture: cmd.texture.0,
                 }));
             gui.last_draw = GuiDrawData {
@@ -445,6 +691,8 @@ pub unsafe extern "C" fn gui_render(ctx: *mut GuiContext) -> GuiDrawData {
                 commands: gui.commands_staging.as_ptr(),
                 command_count: gui.commands_staging.len() as u32,
             };
+            gui.last_effects = data.effects.as_ptr().cast();
+            gui.last_effect_count = data.effects.len();
             if unbalanced {
                 set_last_error(GuiErrorCode::ContractViolation);
             }
@@ -506,6 +754,72 @@ pub unsafe extern "C" fn gui_atlas_generation(ctx: *mut GuiContext) -> u64 {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn gui_add_font(
+    ctx: *mut GuiContext,
+    font_bytes: *const u8,
+    len: usize,
+    px_size: f32,
+) -> u32 {
+    gui_export!(
+        || {
+            if ctx.is_null() || font_bytes.is_null() || len == 0 {
+                set_last_error(GuiErrorCode::InvalidInput);
+                return GUI_FONT_ID_INVALID;
+            }
+            let gui = unsafe { &mut *ctx };
+            let Some(bytes) = (unsafe { slice_arg(font_bytes, len) }) else {
+                set_last_error(GuiErrorCode::InvalidInput);
+                return GUI_FONT_ID_INVALID;
+            };
+            match gui.ctx.add_font(bytes, px_size) {
+                Ok(id) => id.0,
+                Err(_) => {
+                    set_last_error(GuiErrorCode::InvalidInput);
+                    GUI_FONT_ID_INVALID
+                }
+            }
+        },
+        GUI_FONT_ID_INVALID
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_push_font(ctx: *mut GuiContext, id: u32) {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return;
+            };
+            if !gui.ctx.font().is_valid(FontId(id)) {
+                set_last_error(GuiErrorCode::ContractViolation);
+                return;
+            }
+            gui.ctx.ui().push_font(FontId(id));
+            gui.font_scope_depth += 1;
+        },
+        ()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gui_pop_font(ctx: *mut GuiContext) {
+    gui_export!(
+        || {
+            let Some(gui) = (unsafe { active_frame_ctx(ctx) }) else {
+                return;
+            };
+            if gui.font_scope_depth == 0 {
+                set_last_error(GuiErrorCode::ContractViolation);
+                return;
+            }
+            gui.ctx.ui().pop_font();
+            gui.font_scope_depth -= 1;
+        },
+        ()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,7 +837,7 @@ mod tests {
     fn neutral_input() -> GuiInput {
         GuiInput {
             mouse_pos: [0.0; 2],
-            mouse_down: [0; 3],
+            mouse_down: [0; 5],
             mouse_wheel: 0.0,
             viewport_size: [800.0, 600.0],
             keys: std::ptr::null(),
@@ -544,6 +858,49 @@ mod tests {
         let ctx = unsafe { gui_context_new(garbage.as_ptr(), garbage.len()) };
         assert!(ctx.is_null());
         assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+    }
+
+    #[test]
+    fn foreign_slice_bounds_are_checked_before_reading() {
+        let oversized = isize::MAX as usize + 1;
+        assert!(unsafe { slice_arg(DEJAVU_SANS.as_ptr(), oversized) }.is_none());
+        let item = GuiStr {
+            ptr: std::ptr::null(),
+            len: 0,
+        };
+        let misaligned = (&item as *const GuiStr)
+            .cast::<u8>()
+            .wrapping_add(1)
+            .cast::<GuiStr>();
+        assert!(unsafe { slice_arg(misaligned, 1) }.is_none());
+        assert!(unsafe { slice_arg::<u8>(std::ptr::null(), 0) }
+            .unwrap()
+            .is_empty());
+
+        let ctx = unsafe { gui_context_new(DEJAVU_SANS.as_ptr(), oversized) };
+        assert!(ctx.is_null());
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+    }
+
+    #[test]
+    fn oversized_key_count_rejects_frame_without_mutating_context() {
+        let ctx = new_context();
+        let mut input = neutral_input();
+        let event = GuiKeyEvent {
+            kind: GUI_KEY_EVENT_PRESS,
+            key: 0,
+            ch: 0,
+        };
+        input.keys = &event;
+        input.key_count = isize::MAX as usize / std::mem::size_of::<GuiKeyEvent>() + 1;
+        unsafe { gui_new_frame(ctx, &input, 1.0 / 60.0) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+
+        input.key_count = 1;
+        unsafe { gui_new_frame(ctx, &input, 1.0 / 60.0) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_render(ctx) };
+        unsafe { gui_context_free(ctx) };
     }
 
     #[test]
@@ -598,7 +955,9 @@ mod tests {
             (&mut *ctx)
                 .ctx
                 .ui()
-                .window("ffi", |ui| ui.label("hello ffi"))
+                .window("ffi", restricted_gui::ScrollFlags::NONE, |ui| {
+                    ui.label("hello ffi")
+                })
         };
 
         let first = unsafe { gui_render(ctx) };
@@ -690,7 +1049,7 @@ mod tests {
                 "code {code} does not map back"
             );
         }
-        assert_eq!(key_to_code(Key::Alt) as usize + 1, ALL_KEYS.len());
+        assert_eq!(key_to_code(Key::Down) as usize + 1, ALL_KEYS.len());
         assert_eq!(key_from_code(ALL_KEYS.len() as u16), None);
         assert_eq!(key_from_code(u16::MAX), None);
     }
@@ -723,7 +1082,7 @@ mod tests {
         assert_eq!(translate_key_event(&character), Some(KeyEvent::Char('x')));
         let bad_key = GuiKeyEvent {
             kind: GUI_KEY_EVENT_PRESS,
-            key: 62,
+            key: 64,
             ch: 0,
         };
         assert_eq!(translate_key_event(&bad_key), None);
@@ -745,7 +1104,7 @@ mod tests {
     fn new_frame_accepts_a_full_key_stream() {
         let ctx = new_context();
         let mut events = Vec::new();
-        for code in 0..62u16 {
+        for code in 0..64u16 {
             events.push(GuiKeyEvent {
                 kind: GUI_KEY_EVENT_PRESS,
                 key: code,
@@ -778,6 +1137,155 @@ mod tests {
         unsafe { gui_context_free(ctx) };
     }
 
+    fn add_second_face(ctx: *mut GuiContext) -> u32 {
+        let id = unsafe { gui_add_font(ctx, DEJAVU_SANS.as_ptr(), DEJAVU_SANS.len(), 24.0) };
+        assert_ne!(
+            id, GUI_FONT_ID_INVALID,
+            "valid face registration must succeed"
+        );
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        id
+    }
+
+    #[test]
+    fn add_font_registers_a_face_and_push_pop_scopes_text() {
+        let ctx = new_context();
+        let face = add_second_face(ctx);
+        assert_eq!(face, 1, "the second face follows the default face 0");
+
+        let input = neutral_input();
+        unsafe { gui_new_frame(ctx, &input, 0.016) };
+        assert!(unsafe { gui_begin_window(ctx, b"W".as_ptr(), 1, GUI_SCROLL_NONE) });
+        unsafe { gui_push_font(ctx, face) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_label(ctx, b"big text".as_ptr(), 8) };
+        unsafe { gui_pop_font(ctx) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_end_window(ctx) };
+        let data = unsafe { gui_render(ctx) };
+        assert!(data.vertex_count > 0);
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn add_font_failures_return_invalid_id_and_report_invalid_input() {
+        let ctx = new_context();
+        let garbage = [0xABu8; 64];
+        let id = unsafe { gui_add_font(ctx, garbage.as_ptr(), garbage.len(), 16.0) };
+        assert_eq!(id, GUI_FONT_ID_INVALID);
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+
+        let id = unsafe { gui_add_font(ctx, std::ptr::null(), 8, 16.0) };
+        assert_eq!(id, GUI_FONT_ID_INVALID);
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+
+        let id = unsafe { gui_add_font(ctx, DEJAVU_SANS.as_ptr(), 0, 16.0) };
+        assert_eq!(id, GUI_FONT_ID_INVALID);
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+
+        let id = unsafe {
+            gui_add_font(
+                std::ptr::null_mut(),
+                DEJAVU_SANS.as_ptr(),
+                DEJAVU_SANS.len(),
+                16.0,
+            )
+        };
+        assert_eq!(id, GUI_FONT_ID_INVALID);
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+
+        assert_eq!(add_second_face(ctx), 1);
+        unsafe { gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn push_font_with_unknown_id_is_contract_violation_not_panic() {
+        let ctx = new_context();
+        let input = neutral_input();
+        unsafe { gui_new_frame(ctx, &input, 0.016) };
+        unsafe { gui_push_font(ctx, 1) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+        unsafe { gui_push_font(ctx, GUI_FONT_ID_INVALID) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+        let data = unsafe { gui_render(ctx) };
+        let _ = data;
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn pop_font_with_no_scope_open_is_contract_violation_not_panic() {
+        let ctx = new_context();
+        let input = neutral_input();
+        unsafe { gui_new_frame(ctx, &input, 0.016) };
+        unsafe { gui_pop_font(ctx) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+        let data = unsafe { gui_render(ctx) };
+        let _ = data;
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn font_scope_calls_without_a_frame_are_contract_violations() {
+        let ctx = new_context();
+        let face = add_second_face(ctx);
+        unsafe { gui_push_font(ctx, face) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+        unsafe { gui_pop_font(ctx) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+        unsafe { gui_push_font(std::ptr::null_mut(), face) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+        unsafe { gui_pop_font(std::ptr::null_mut()) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::InvalidInput as u8);
+        unsafe { gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn unbalanced_font_scope_is_violation_at_render_not_panic() {
+        let ctx = new_context();
+        let face = add_second_face(ctx);
+        let input = neutral_input();
+        unsafe { gui_new_frame(ctx, &input, 0.016) };
+        assert!(unsafe { gui_begin_window(ctx, b"W".as_ptr(), 1, GUI_SCROLL_NONE) });
+        unsafe { gui_push_font(ctx, face) };
+        unsafe { gui_label(ctx, b"leaky".as_ptr(), 5) };
+        unsafe { gui_end_window(ctx) };
+        let data = unsafe { gui_render(ctx) };
+        assert!(data.vertex_count > 0, "the frame still renders");
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+
+        let input = neutral_input();
+        unsafe { gui_new_frame(ctx, &input, 0.016) };
+        let data = unsafe { gui_render(ctx) };
+        let _ = data;
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_context_free(ctx) };
+    }
+
+    #[test]
+    fn nested_font_scopes_unwind_in_order() {
+        let ctx = new_context();
+        let face = add_second_face(ctx);
+        let input = neutral_input();
+        unsafe { gui_new_frame(ctx, &input, 0.016) };
+        assert!(unsafe { gui_begin_window(ctx, b"W".as_ptr(), 1, GUI_SCROLL_NONE) });
+        unsafe { gui_push_font(ctx, face) };
+        unsafe { gui_push_font(ctx, 0) };
+        unsafe { gui_pop_font(ctx) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_pop_font(ctx) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_pop_font(ctx) };
+        assert_eq!(gui_last_error_code(), GuiErrorCode::ContractViolation as u8);
+        unsafe { gui_end_window(ctx) };
+        let data = unsafe { gui_render(ctx) };
+        assert!(data.vertex_count > 0);
+        assert_eq!(gui_last_error_code(), GuiErrorCode::None as u8);
+        unsafe { gui_context_free(ctx) };
+    }
+
     #[test]
     fn ffi_struct_layouts_match_core_layouts() {
         use std::mem::{align_of, offset_of, size_of};
@@ -786,6 +1294,11 @@ mod tests {
         assert_eq!(offset_of!(GuiVert, pos), offset_of!(DrawVert, pos));
         assert_eq!(offset_of!(GuiVert, uv), offset_of!(DrawVert, uv));
         assert_eq!(offset_of!(GuiVert, col), offset_of!(DrawVert, col));
+        assert_eq!(size_of::<DrawVert>(), 20);
+        assert_eq!(align_of::<DrawVert>(), 4);
+        assert_eq!(offset_of!(DrawVert, pos), 0);
+        assert_eq!(offset_of!(DrawVert, uv), 8);
+        assert_eq!(offset_of!(DrawVert, col), 16);
         assert_eq!(size_of::<TextureId>(), size_of::<u64>());
         assert_eq!(align_of::<TextureId>(), align_of::<u64>());
     }

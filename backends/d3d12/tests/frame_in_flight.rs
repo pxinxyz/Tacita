@@ -2,6 +2,7 @@ use restricted_gui::context::Context as GuiContext;
 use restricted_gui::draw::{DrawCmd, DrawData, DrawVert, TextureId};
 use restricted_gui::input::InputState;
 use restricted_gui::ui::Ui;
+use restricted_gui::ScrollFlags;
 use restricted_gui_d3d12::{D3d12Backend, OffscreenTarget, Queue};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
@@ -60,7 +61,7 @@ fn frame(
         ..Default::default()
     });
     ctx.new_frame(1.0 / 60.0);
-    ctx.ui().window("test", declare);
+    ctx.ui().window("test", ScrollFlags::NONE, declare);
     let (pixels, width, height) = ctx.font().atlas_pixels();
     backend
         .upload_atlas(pixels, width, height)
@@ -83,7 +84,6 @@ fn frame(
     }
 }
 
-// Tries to break the fence discipline on purpose: alternating uploads and re-registrations until the retirement queue begs for mercy.
 #[test]
 fn hammer_alternating_uploads_and_reregistrations_stay_coherent() {
     let (mut backend, queue, target) = setup();
@@ -226,11 +226,13 @@ fn uploads_and_renders_never_wait_for_full_gpu_idle() {
     ];
     let indices = [0u32, 1, 2, 0, 2, 3];
     let commands = [DrawCmd {
+        effects: 0,
         elem_count: 6,
         clip_rect: [0.0, 0.0, W as f32, H as f32],
         texture: TextureId(2),
     }];
     let draw = DrawData {
+        effects: &[],
         vertices: &vertices,
         indices: &indices,
         commands: &commands,
@@ -293,11 +295,13 @@ fn retirement_queue_drains_once_fences_pass() {
     ];
     let indices = [0u32, 1, 2, 0, 2, 3];
     let commands = [DrawCmd {
+        effects: 0,
         elem_count: 6,
         clip_rect: [0.0, 0.0, W as f32, H as f32],
         texture: TextureId::WHITE,
     }];
     let draw = DrawData {
+        effects: &[],
         vertices: &vertices,
         indices: &indices,
         commands: &commands,

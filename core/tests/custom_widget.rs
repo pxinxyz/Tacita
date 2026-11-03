@@ -1,6 +1,7 @@
 use restricted_gui::context::Context;
 use restricted_gui::input::InputState;
 use restricted_gui::ui::Ui;
+use restricted_gui::ScrollFlags;
 
 const DEJAVU_SANS: &[u8] = include_bytes!("assets/DejaVuSans.ttf");
 
@@ -71,11 +72,11 @@ fn frame(
 ) -> Vec<Vert> {
     ctx.set_input(InputState {
         mouse_pos,
-        mouse_down: [left_down, false, false],
+        mouse_down: [left_down, false, false, false, false],
         ..Default::default()
     });
     ctx.new_frame(0.016);
-    ctx.ui().window("W", f);
+    ctx.ui().window("W", ScrollFlags::NONE, f);
     let data = ctx.render();
     data.vertices.iter().map(|v| (v.pos, v.col)).collect()
 }
@@ -126,7 +127,6 @@ fn settle(ctx: &mut Context, value: &mut bool) -> [f32; 4] {
     find_square(&verts, 24.0, IDLE).expect("the toggle square must emit its idle geometry")
 }
 
-// Proof that a host can build a first-class widget from the public primitives. If this breaks, docs/custom-widgets.md becomes fan fiction.
 #[test]
 fn idle_toggle_emits_geometry_in_idle_color() {
     let mut ctx = test_context();
@@ -332,10 +332,10 @@ fn mouse_edge_queries_report_exactly_once() {
 
 #[test]
 #[should_panic]
-fn mouse_button_index_above_2_panics() {
+fn mouse_button_index_above_4_panics() {
     let mut ctx = test_context();
     frame(&mut ctx, AWAY, false, |ui| {
-        let _ = ui.mouse_down(3);
+        let _ = ui.mouse_down(5);
     });
 }
 

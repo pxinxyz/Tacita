@@ -3,9 +3,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use restricted_gui::context::Context;
 use restricted_gui::draw::TextureId;
+use restricted_gui::font::FontId;
 use restricted_gui::input::{InputState, Key, KeyBinding, KeyEvent};
+use restricted_gui::ui::Ui;
+use restricted_gui::ScrollFlags;
 
-// A global allocator that counts. Steady-state frames must allocate ZERO after warmup, and this struct is the snitch that enforces it.
 struct CountingAllocator;
 
 static ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -165,6 +167,7 @@ impl CLayout {
 
 struct Rig {
     ctx: Context,
+    big_font: FontId,
     buf: String,
     gain: f32,
     enabled: bool,
@@ -183,8 +186,13 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        let mut ctx = Context::new(DEJAVU_SANS).expect("DejaVu Sans must load");
+        let big_font = ctx
+            .add_font(DEJAVU_SANS, 24.0)
+            .expect("a second face must register");
         Self {
-            ctx: Context::new(DEJAVU_SANS).expect("DejaVu Sans must load"),
+            ctx,
+            big_font,
             buf: String::from("hello"),
             gain: 0.5,
             enabled: true,
@@ -207,7 +215,7 @@ impl Rig {
         self.ctx.new_frame(0.016);
         {
             let mut ui = self.ctx.ui();
-            ui.window("Main", |ui| {
+            ui.window("Main", ScrollFlags::NONE, |ui| {
                 ui.text_input("##t", &mut self.buf);
                 ui.slider_float("Gain", &mut self.gain, 0.0..=1.0);
                 ui.checkbox("Enabled", &mut self.enabled);
@@ -230,7 +238,7 @@ impl Rig {
         self.ctx.new_frame(dt);
         {
             let mut ui = self.ctx.ui();
-            ui.window("Main", |ui| {
+            ui.window("Main", ScrollFlags::NONE, |ui| {
                 ui.button("Apply");
                 ui.tooltip_text("Apply the settings");
                 self.keybind_changed |= ui.keybind("Shortcut", &mut self.binding);
@@ -259,7 +267,7 @@ impl Rig {
                 });
                 ui.combo("Long", &LONG_ITEMS, &mut self.selected_long);
             });
-            ui.window("Aux", |ui| {
+            ui.window("Aux", ScrollFlags::NONE, |ui| {
                 ui.label("Aux window");
                 ui.button("Aux button");
             });
@@ -270,6 +278,13 @@ impl Rig {
     fn observe(&mut self) {
         let layout = CLayout::of(&self.ctx);
         let region = layout.region_rect();
+        let inset = 1.0 + 4.0 * (1.0 - std::f32::consts::FRAC_1_SQRT_2);
+        let region_clip = [
+            region[0] + inset,
+            region[1] + inset,
+            region[2] - inset,
+            region[3] - inset,
+        ];
         let popup_top = layout.long_combo_button_bottom() - 1.0;
         let data = self.ctx.render();
         self.popup_visible = data
@@ -289,7 +304,7 @@ impl Rig {
             self.clips[i] = cmd.clip_rect;
             let next = offset + cmd.elem_count as usize;
             if cmd.texture == TextureId::FONT {
-                if cmd.clip_rect == region {
+                if cmd.clip_rect == region_clip {
                     for &idx in &data.indices[offset..next] {
                         let y = data.vertices[idx as usize].pos[1];
                         region_min_y = Some(match region_min_y {
@@ -326,7 +341,7 @@ impl Rig {
     fn click_frame(&mut self, point: [f32; 2], left_down: bool) {
         self.frame(InputState {
             mouse_pos: point,
-            mouse_down: [left_down, false, false],
+            mouse_down: [left_down, false, false, false, false],
             viewport_size: VIEWPORT,
             ..Default::default()
         });
@@ -343,7 +358,7 @@ impl Rig {
         self.frame_c(
             InputState {
                 mouse_pos: mouse,
-                mouse_down: [left_down, false, false],
+                mouse_down: [left_down, false, false, false, false],
                 mouse_wheel: wheel,
                 keys,
                 viewport_size: VIEWPORT,
@@ -354,6 +369,29 @@ impl Rig {
 
     fn clips_snapshot(&self) -> ([[f32; 4]; 128], usize) {
         (self.clips, self.clip_count)
+    }
+
+    fn font_switch_frame(&mut self, scoped: bool) {
+        self.ctx.set_input(InputState {
+            mouse_pos: AWAY,
+            viewport_size: VIEWPORT,
+            ..Default::default()
+        });
+        self.ctx.new_frame(0.016);
+        {
+            let mut ui = self.ctx.ui();
+            ui.window("Fonts", ScrollFlags::NONE, |ui| {
+                ui.label("plain");
+                if scoped {
+                    ui.with_font(self.big_font, |ui| {
+                        ui.label("big face");
+                        let _ = ui.button("Big");
+                    });
+                }
+            });
+        }
+        let data = self.ctx.render();
+        self.vertex_count = data.vertices.len();
     }
 }
 
@@ -623,5 +661,214 @@ fn steady_frames_allocate_zero_after_warmup() {
     assert_eq!(
         scenario_c6_allocs, 0,
         "frames wheel-scrolling a popup must allocate zero"
+    );
+
+    rig.font_switch_frame(false);
+    let vertices_unscoped = rig.vertex_count;
+    rig.font_switch_frame(true);
+    rig.font_switch_frame(true);
+    assert!(
+        rig.vertex_count > vertices_unscoped,
+        "the scoped frame must emit more geometry (big-face label + button)"
+    );
+
+    let measured = allocation_count();
+    for _ in 0..16 {
+        rig.font_switch_frame(true);
+    }
+    let scenario_d_allocs = allocation_count() - measured;
+    assert_eq!(
+        scenario_d_allocs, 0,
+        "steady frames switching font faces via with_font must allocate zero"
+    );
+
+    type EVert = ([f32; 2], [u8; 4]);
+    const SC_MARK: [u8; 4] = [255, 0, 0, 255];
+    const BODY_MARK: [u8; 4] = [0, 255, 0, 255];
+    const E_MARK_SIZE: f32 = 16.0;
+
+    fn e_marker(ui: &mut Ui<'_>, color: [u8; 4]) {
+        let rect = ui.allocate([E_MARK_SIZE, E_MARK_SIZE]);
+        ui.draw_rect_filled([rect[0], rect[1]], [rect[2], rect[3]], color);
+    }
+
+    fn e_find_marker(verts: &[EVert], color: [u8; 4]) -> [f32; 4] {
+        verts
+            .windows(4)
+            .find_map(|quad| {
+                let (min, max) = (quad[0].0, quad[2].0);
+                let matches = quad.iter().all(|v| v.1 == color)
+                    && (max[0] - min[0] - E_MARK_SIZE).abs() < 1e-3
+                    && (max[1] - min[1] - E_MARK_SIZE).abs() < 1e-3;
+                if matches {
+                    Some([min[0], min[1], max[0], max[1]])
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("scenario E marker {color:?} not found"))
+    }
+
+    fn e_declare(ui: &mut Ui<'_>) {
+        ui.window("Scroll", ScrollFlags::BAR, |ui| {
+            ui.child("sc", [220.0, 80.0], ScrollFlags::BAR, |ui| {
+                e_marker(ui, SC_MARK);
+                for line in LOG_LINES {
+                    ui.label(line);
+                }
+            });
+            ui.child("nc", [220.0, 80.0], ScrollFlags::NONE, |ui| {
+                for line in LOG_LINES {
+                    ui.label(line);
+                }
+            });
+            e_marker(ui, BODY_MARK);
+            for line in LOG_LINES {
+                ui.label(line);
+            }
+            for line in LOG_LINES {
+                ui.label(line);
+            }
+        });
+    }
+
+    fn e_frame(ctx: &mut Context, mouse: [f32; 2], left_down: bool, wheel: f32) {
+        ctx.set_input(InputState {
+            mouse_pos: mouse,
+            mouse_down: [left_down, false, false, false, false],
+            mouse_wheel: wheel,
+            keys: &[],
+            viewport_size: VIEWPORT,
+        });
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            e_declare(&mut ui);
+        }
+        ctx.render();
+    }
+
+    fn e_observe(ctx: &mut Context, mouse: [f32; 2], left_down: bool, wheel: f32) -> Vec<EVert> {
+        ctx.set_input(InputState {
+            mouse_pos: mouse,
+            mouse_down: [left_down, false, false, false, false],
+            mouse_wheel: wheel,
+            keys: &[],
+            viewport_size: VIEWPORT,
+        });
+        ctx.new_frame(0.016);
+        {
+            let mut ui = ctx.ui();
+            e_declare(&mut ui);
+        }
+        let data = ctx.render();
+        data.vertices.iter().map(|v| (v.pos, v.col)).collect()
+    }
+
+    let mut ctx_e = Context::new(DEJAVU_SANS).expect("DejaVu Sans must load");
+    let title_bar_h = row_height(&ctx_e);
+    let content_origin = [
+        WINDOW_POS[0] + ctx_e.style.window_padding[0],
+        WINDOW_POS[1] + title_bar_h + ctx_e.style.window_padding[1],
+    ];
+    let spacing = ctx_e.style.item_spacing[1];
+    let child_h = 80.0;
+    let over_child = [content_origin[0] + 10.0, content_origin[1] + 10.0];
+    let over_body = [
+        content_origin[0] + 10.0,
+        content_origin[1] + 2.0 * child_h + 2.0 * spacing + 10.0,
+    ];
+    let body_right = WINDOW_POS[0] + 300.0;
+    let body_top = WINDOW_POS[1] + title_bar_h;
+    let track_left = body_right - ctx_e.style.scrollbar_size;
+    let drag_press = [
+        track_left + ctx_e.style.scrollbar_size / 2.0,
+        body_top + 30.0,
+    ];
+    let reset_probe = [content_origin[0] + 240.0, content_origin[1] + 10.0];
+
+    e_frame(&mut ctx_e, AWAY, false, 0.0);
+    e_frame(&mut ctx_e, AWAY, false, 0.0);
+    e_frame(&mut ctx_e, over_child, false, -1.0);
+    e_frame(&mut ctx_e, over_child, false, 1.0);
+    e_frame(&mut ctx_e, over_body, false, -1.0);
+    e_frame(&mut ctx_e, over_body, false, 1.0);
+    e_frame(&mut ctx_e, drag_press, true, 0.0);
+    e_frame(&mut ctx_e, [drag_press[0], drag_press[1] + 60.0], true, 0.0);
+    e_frame(&mut ctx_e, AWAY, false, 0.0);
+    e_frame(&mut ctx_e, reset_probe, false, 10_000.0);
+    e_frame(&mut ctx_e, AWAY, false, 0.0);
+
+    let measured = allocation_count();
+    for _ in 0..16 {
+        e_frame(&mut ctx_e, AWAY, false, 0.0);
+    }
+    let scenario_e1_allocs = allocation_count() - measured;
+    assert_eq!(
+        scenario_e1_allocs, 0,
+        "idle frames of a BAR window holding a BAR child and a NONE child must allocate zero"
+    );
+
+    let before = e_observe(&mut ctx_e, over_child, false, 0.0);
+    let sc_before = e_find_marker(&before, SC_MARK);
+    let body_before = e_find_marker(&before, BODY_MARK);
+    let measured = allocation_count();
+    for _ in 0..16 {
+        e_frame(&mut ctx_e, over_child, false, -1.0);
+    }
+    let scenario_e2_allocs = allocation_count() - measured;
+    let after = e_observe(&mut ctx_e, over_child, false, 0.0);
+    let sc_after = e_find_marker(&after, SC_MARK);
+    let body_after = e_find_marker(&after, BODY_MARK);
+    assert_ne!(
+        sc_before[1], sc_after[1],
+        "the child's scroll offset must move under the wheel"
+    );
+    assert_eq!(
+        body_before[1], body_after[1],
+        "the window must not co-scroll when its child claims the wheel"
+    );
+    assert_eq!(
+        scenario_e2_allocs, 0,
+        "frames wheel-scrolling the child must allocate zero"
+    );
+
+    let before = e_observe(&mut ctx_e, over_body, false, 0.0);
+    let body_before = e_find_marker(&before, BODY_MARK);
+    let measured = allocation_count();
+    for _ in 0..16 {
+        e_frame(&mut ctx_e, over_body, false, -1.0);
+    }
+    let scenario_e3_allocs = allocation_count() - measured;
+    let after = e_observe(&mut ctx_e, over_body, false, 0.0);
+    let body_after = e_find_marker(&after, BODY_MARK);
+    assert_ne!(
+        body_before[1], body_after[1],
+        "the window's own scroll offset must move under the wheel"
+    );
+    assert_eq!(
+        scenario_e3_allocs, 0,
+        "frames wheel-scrolling the window's bare body must allocate zero"
+    );
+
+    let before = e_observe(&mut ctx_e, AWAY, false, 0.0);
+    let body_before = e_find_marker(&before, BODY_MARK);
+    e_frame(&mut ctx_e, drag_press, true, 0.0);
+    let measured = allocation_count();
+    for i in 0..16 {
+        let y = drag_press[1] + i as f32 * 4.0;
+        e_frame(&mut ctx_e, [drag_press[0], y], true, 0.0);
+    }
+    let scenario_e4_allocs = allocation_count() - measured;
+    let after = e_observe(&mut ctx_e, [drag_press[0], drag_press[1] + 60.0], true, 0.0);
+    e_frame(&mut ctx_e, AWAY, false, 0.0);
+    let body_after = e_find_marker(&after, BODY_MARK);
+    assert_ne!(
+        body_before[1], body_after[1],
+        "the window's content must move while its scrollbar is being dragged"
+    );
+    assert_eq!(
+        scenario_e4_allocs, 0,
+        "frames with an active scrollbar drag must allocate zero"
     );
 }

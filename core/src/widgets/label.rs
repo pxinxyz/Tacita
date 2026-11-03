@@ -1,15 +1,16 @@
 use crate::id::split_label;
 use crate::ui::Ui;
 
-// Displays text. Refuses to do anything else. The most emotionally stable widget in the crate.
 pub(crate) fn label(ui: &mut Ui, text: &str) {
     let ctx = &mut *ui.ctx;
+    let _ = ctx.id_stack.id(text);
     let display = split_label(text).0;
-    let size = ctx.font.measure(display);
+    let face = ctx.active_font();
+    let size = ctx.font.measure_in(face, display);
     let rect = super::item_rect(ctx, size);
     let color = ctx.style.text;
     let (font, draw_list) = super::draw_parts(ctx);
-    draw_list.add_text(font, [rect[0], rect[1]], display, color);
+    draw_list.add_text(font, face, [rect[0], rect[1]], display, color);
 }
 
 #[cfg(test)]

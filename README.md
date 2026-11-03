@@ -1,94 +1,159 @@
-# Tacita (internally, restricted-gui)
+![Tacita](banner.png)
 
-> An immediate-mode GUI framework written in Rust — `#![no_std]`, renderer-agnostic, built for embedding anywhere.
+[![Conventional Commits](https://img.shields.io/badge/Conventional_Commits-1.0.0-4c566a?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/en/v1.0.0/)
+[![Rust 2021](https://img.shields.io/badge/Rust-2021-4c566a?logo=rust&logoColor=white)](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
+[![License: MIT](https://img.shields.io/badge/License-MIT-4c566a)](LICENSE)
 
-Tacita (aka restricted-gui) is an immediate-mode GUI library whose core is `#![no_std]` (`core` + `alloc`, no CRT) and fully renderer- and platform-agnostic. The core never touches a GPU or an OS API: hosts feed it a per-frame input snapshot, declare UI with flat calls, and consume vertex/index/command draw lists through any renderer they bring.
+Tacita is an immediate mode GUI framework written in Rust.
+The application declares controls each frame.
+Tacita retains interaction state between frames.
 
-The widget surface covers windows, tabs, collapsing headers, scroll regions, checkboxes, sliders, buttons, text inputs, combo boxes, a rich HSV color picker, keybind selectors, tooltips, and icon fonts merged into the same atlas as text. Anti-aliasing is analytic — exact pixel coverage rasterization in the AGG/FreeType lineage, cached as masks in the font atlas — and steady-state frames allocate zero memory after warmup.
+The application owns its window, graphics device, and swap chain.
+Tacita produces draw data for a renderer.
+The core uses `no_std` with `alloc`.
 
-Tacita targets hosts that own their own rendering and cannot hand control to a framework. Typical uses:
+## Features
 
-- **In-process overlays** — loaded into a running process, rendering through an `IDXGISwapChain::Present` hook with input from a `WndProc` hook, where the input-capture queries drive the swallow/pass-through decision against whatever runs beneath.
-- **Game and engine tooling** — debug HUDs, inspectors and in-editor panels for a host that already owns its device and swap chain.
-- **Embedded and headless hosts** — `#![no_std]` with a bring-your-own renderer, including offscreen targets.
-- **Developer tooling** — internal inspectors that need a real UI without taking a widget-toolkit dependency.
+- The core provides windows, tabs, menus, popups, scroll areas, and docking.
+- The layout system supports rows, columns, grids, wrapping, and spanning.
+- Data controls include virtualized lists, sortable tables, plots, curve editors, and gradient editors.
+- The text system supports shaping, bidirectional layout, font fallback, and multiline editing.
+- The input system supports keyboard navigation, shortcuts, mouse capture, and drag operations.
+- The animation system provides tweens, springs, keyframes, and reduced motion settings.
+- Renderers support rounded shapes, gradients, masks, blur, and rendering into textures.
+- The core exposes accessibility nodes for the application.
+- The Windows accessibility bridge uses Microsoft Active Accessibility.
 
-The immediate-mode design is what makes these shareable: the core holds no platform or GPU state, so the same widget code runs under D3D11, D3D12, wgpu, or a host-specific backend.
+## Build and run
 
-## Status
+The Windows build requires Rust, Microsoft C++ build tools, and the Windows SDK.
+Cargo package names retain the `restricted-gui` prefix.
+These commands run from the repository root.
 
-Feature-complete and in active use — the full widget set, both native backends, the C++ FFI, and the Win32 input adapter are shipped and verified. Very usable today, but not finalized: the API surface may still shift, and further work (more widgets, IME/CJK input, multi-viewport) is pulled by real usage rather than a fixed roadmap.
-
-## Architecture
-
-```
- host application (injected DLL / windowed app)
-        │  OS input events (WndProc hook, winit, ...)
-        ▼
-┌───────────────────────────────┐
-│  adapters/win32               │
-│  • raw message → InputState   │
-│  • no unsafe, no Win32 calls  │
-└──────────────┬────────────────┘
-               │  per-frame InputState
-┌──────────────┴────────────────┐
-│  core (restricted-gui)        │
-│  • #![no_std], zero-alloc     │
-│  • widgets / layout / ids     │
-│  • coverage-mask AA raster    │
-│  • capture & z-order state    │
-└──────────────┬────────────────┘
-               │  DrawData (verts / indices / cmds)
-┌──────────────┴────────────────┐
-│  backends                     │
-│  • d3d11  • d3d12  • wgpu     │
-│  (host owns device/swapchain) │
-└──────────────┬────────────────┘
-               │
-        Present hook / swapchain
-```
-
-`ffi/` (extern "C" + hand-written C++ header) and `sdk/` (flat `Gui` facade) sit beside `core/` as alternative entry surfaces.
-
-## Crates
-
-| Crate | Responsibility | Status |
-|---|---|---|
-| `core` | no_std library — widgets, layout, draw lists, text, coverage-mask AA | ✅ Complete |
-| `sdk` | Flat `Gui` facade over the core (forwards-only) | ✅ Complete |
-| `ffi` | extern "C" wrapper + C++ header with two-sided layout consistency guard | ✅ Complete |
-| `adapters/win32` | Win32 message → `InputState` translation for WndProc hooks | ✅ Complete |
-| `backends/d3d11` | D3D11 renderer; host owns device/swapchain | ✅ Complete |
-| `backends/d3d12` | D3D12 renderer; fence-based frame sync, deferred release | ✅ Complete |
-| `demo` | wgpu dev harness (reference backend) | ✅ Complete |
-
-## Verification
-
-- 400+ core tests — widget logic, capture/z-order semantics, layout, zero-alloc (counting allocator)
-- Headless GPU pixel tests on real hardware for both D3D11 and D3D12 — renders read back and asserted pixel-exact
-- MSVC-compiled C++ consumer smoke test against the FFI surface
-- Two-sided consistency guard keeping the C++ header and the Rust structs in lockstep
-
-## Building
+Cargo starts the wgpu demo:
 
 ```sh
-cargo test --workspace                                      # full suite (GPU suites run headless)
-cargo build -p restricted-gui --target x86_64-unknown-none  # the no_std gate
+cargo run --locked -p restricted-gui-demo
 ```
 
-## Usage
+Cargo starts the D3D11 example:
+
+```sh
+cargo run --locked -p restricted-gui-d3d11 --example overlay_d3d11
+```
+
+Cargo starts the D3D12 example:
+
+```sh
+cargo run --locked -p restricted-gui-d3d12 --example overlay_d3d12
+```
+
+## Rust integration
+
+The SDK provides control functions through `Gui`.
+The application creates `Gui` once with font bytes.
+
+This function declares controls inside an active frame:
 
 ```rust
-let mut gui = Gui::new(font_bytes)?;   // once
+use restricted_gui_sdk::{Gui, ScrollFlags};
 
-// per frame:
-gui.new_frame(input, dt);              // InputState from your platform layer
-gui.begin_window("Status");
-if gui.button("Save Config") { /* ... */ }
-gui.end_window();
-let draw = gui.render();               // DrawData → your renderer
+fn settings(gui: &mut Gui, enabled: &mut bool) {
+    gui.begin_window("Settings", ScrollFlags::NONE);
+    gui.checkbox("Enabled", enabled);
+    gui.end_window();
+}
 ```
 
-## License
+The application follows this sequence each frame:
 
-MIT
+1. The application calls `Gui::new_frame(input, dt)`.
+2. The application declares controls through the SDK.
+3. The application checks `Gui::atlas_generation()` after declaring controls.
+4. The application uploads `Gui::atlas_pixels()` before its first draw and whenever the atlas generation changes.
+5. The application calls `Gui::render()` to obtain `DrawData`.
+6. The renderer consumes `DrawData` before the application starts the next frame.
+
+The `dt` argument measures elapsed time in seconds.
+The application uses logical pixels for input and layout.
+The renderer applies the display scale.
+
+The application closes each `begin_*` call with its matching `end_*` call.
+The SDK panics when the application leaves a scope open.
+
+The [D3D11 example](backends/d3d11/examples/overlay_d3d11.rs) shows input handling and renderer integration.
+The [D3D12 example](backends/d3d12/examples/overlay_d3d12.rs) shows the equivalent D3D12 integration.
+
+## C and C++ integration
+
+The [C header](ffi/restricted_gui.h) defines the C interface.
+The C wrapper exposes context handles, control functions, and draw data.
+The C wrapper catches Rust panics at the C boundary.
+The application reads errors through `gui_last_error_code()`.
+
+Cargo builds the static library and dynamic library:
+
+```sh
+cargo build --locked -p restricted-gui-ffi
+```
+
+The [C++ smoke program](ffi/tests/smoke.cpp) shows context creation, control declarations, and draw data access.
+
+## Workspace
+
+| Path | Responsibility |
+| --- | --- |
+| [`core`](core) | Implements controls, layout, input, text, and drawing. |
+| [`sdk`](sdk) | Exposes control functions through `Gui`. |
+| [`ffi`](ffi) | Exposes the C interface. |
+| [`backends/d3d11`](backends/d3d11) | Renders draw data through D3D11. |
+| [`backends/d3d12`](backends/d3d12) | Renders draw data through D3D12. |
+| [`backends/shaders`](backends/shaders) | Defines shared HLSL and WGSL shaders. |
+| [`adapters/win32`](adapters/win32) | Translates Win32 messages into input. |
+| [`host`](host) | Provides clipboard, accessibility, and file watching services. |
+| [`demo`](demo) | Runs the wgpu demo. |
+| [`fuzz`](fuzz) | Tests parsers and input with generated data. |
+| [`rhai-probe`](rhai-probe) | Tests Rhai integration separately. |
+
+The `fuzz` and `rhai-probe` directories contain separate Cargo workspaces.
+
+## Checks
+
+These commands run the workspace checks on Windows:
+
+```sh
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+```
+
+The native renderer tests draw into offscreen textures.
+The [D3D11 image tests](backends/d3d11/tests/visual_regression.rs) compare captures at four display scales.
+The [allocation tests](core/tests/zero_alloc.rs) check selected frame sequences after warmup.
+
+The bare-metal build checks the `no_std` core and SDK:
+
+```sh
+rustup target add x86_64-unknown-none
+cargo build --locked -p restricted-gui -p restricted-gui-sdk --target x86_64-unknown-none
+```
+
+Git Bash runs the C++ smoke check:
+
+```sh
+bash ffi/tests/build_smoke.sh
+```
+
+## Scope
+
+The core requires an allocator.
+Initialization, new glyphs, and storage growth can allocate memory.
+Allocation tests cover specific frame sequences after warmup.
+
+The native renderers require Windows.
+The demo contains the wgpu renderer.
+The SVG parser supports a limited set of monochrome shapes.
+
+The docking system supports left, right, and floating panels.
+The Windows accessibility bridge does not expose UI Automation text patterns.
+
+Bundled fonts retain their license notices in [`core/tests/assets`](core/tests/assets).

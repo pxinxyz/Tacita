@@ -21,7 +21,6 @@ pub struct OffscreenTarget {
     texture: ID3D12Resource,
     _rtv_heap: ID3D12DescriptorHeap,
     rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    // The READBACK heap: the only D3D12 memory the CPU is allowed to peek at. Everything else is "GPU says no".
     readback: ID3D12Resource,
     readback_footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
     allocator: ID3D12CommandAllocator,

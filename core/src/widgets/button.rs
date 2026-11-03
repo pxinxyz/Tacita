@@ -2,29 +2,44 @@ use super::{draw_border, lighten, BORDER_LIGHTEN};
 use crate::id::split_label;
 use crate::ui::{hovered, point_in_rect, Ui};
 
-// Activates on RELEASE inside the rect, not on press -- so the user can drag off mid-click and repent. UX mercy, one if-statement deep.
 pub(crate) fn button(ui: &mut Ui, label: &str) -> bool {
+    button_impl(ui, label, None)
+}
+
+pub(crate) fn icon_button(ui: &mut Ui, label: &str, side: f32) -> bool {
+    button_impl(ui, label, Some(side))
+}
+
+fn button_impl(ui: &mut Ui, label: &str, square_side: Option<f32>) -> bool {
     let ctx = &mut *ui.ctx;
     let id = super::widget_id(ctx, label);
     let display = split_label(label).0;
     let style = ctx.style;
-    let text_size = ctx.font.measure(display);
-    let size = [
+    let face = ctx.active_font();
+    let text_size = ctx.font.measure_in(face, display);
+    let natural = [
         text_size[0] + 2.0 * style.frame_padding[0],
         text_size[1] + 2.0 * style.frame_padding[1],
     ];
-    let rect = super::item_rect(ctx, size);
-    super::register_item(ctx, id, rect);
+    let size = if let Some(side) = square_side {
+        let side = if side.is_finite() { side.max(0.0) } else { 0.0 };
+        let side = side.max(natural[0]).max(natural[1]);
+        [side, side]
+    } else {
+        natural
+    };
+    let rect = super::interactive_rect(ctx, size);
+    super::register_focusable_item(ctx, id, rect);
 
     let mouse = ctx.input.mouse_pos;
-    let inside = point_in_rect(mouse, rect);
+    let inside = point_in_rect(mouse, ctx.target_rect(rect));
     let left_down = ctx.input.mouse_down[0];
     let left_pressed = left_down && !ctx.prev_mouse_down[0];
     if inside && left_pressed {
         ctx.set_active(id);
     }
     let held = ctx.active == Some(id);
-    let clicked = held && !left_down && inside;
+    let clicked = (held && !left_down && inside) || ctx.keyboard_activate == Some(id);
     if held && !left_down {
         ctx.clear_active();
     }
@@ -42,6 +57,7 @@ pub(crate) fn button(ui: &mut Ui, label: &str) -> bool {
         style.widget_bg
     };
 
+    let bg = ctx.widget_color(id, bg);
     let (font, draw_list) = super::draw_parts(ctx);
     super::chrome_fill(font, draw_list, style.corner_rounding, rect, bg);
     if style.border_size > 0.0 {
@@ -58,7 +74,7 @@ pub(crate) fn button(ui: &mut Ui, label: &str) -> bool {
         rect[0] + (size[0] - text_size[0]) / 2.0,
         rect[1] + (size[1] - text_size[1]) / 2.0,
     ];
-    draw_list.add_text(font, text_pos, display, style.text);
+    draw_list.add_text(font, face, text_pos, display, style.text);
     clicked
 }
 
@@ -261,7 +277,9 @@ mod tests {
         let rect = settle_ok(&mut ctx);
         let text_size = ctx.font.measure("OK");
         let centered_pen_x = rect[0] + ((rect[2] - rect[0]) - text_size[0]) / 2.0;
-        let (_, quad) = ctx.font.glyph_quad('O', [centered_pen_x, 0.0]);
+        let (_, quad) =
+            ctx.font
+                .glyph_quad(crate::font::FontId::DEFAULT, 'O', [centered_pen_x, 0.0]);
         let expected_min_x = quad.expect("'O' has ink").min[0];
         let actual_min_x = glyph_min_x_in(&ctx, rect).expect("button label glyphs must be emitted");
         assert!(

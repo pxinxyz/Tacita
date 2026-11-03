@@ -3,13 +3,44 @@ use crate::id::split_label;
 use crate::ui::{hovered, point_in_rect, Ui};
 use core::fmt::Write;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SliderAppearance {
+    Grab,
+    Filled,
+}
+
 pub(crate) fn slider_float(
     ui: &mut Ui,
     label: &str,
     value: &mut f32,
     range: core::ops::RangeInclusive<f32>,
 ) -> bool {
-    slider_impl(ui, label, value, *range.start(), *range.end(), false)
+    slider_impl(
+        ui,
+        label,
+        value,
+        *range.start(),
+        *range.end(),
+        false,
+        SliderAppearance::Grab,
+    )
+}
+
+pub(crate) fn filled_slider_float(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: core::ops::RangeInclusive<f32>,
+) -> bool {
+    slider_impl(
+        ui,
+        label,
+        value,
+        *range.start(),
+        *range.end(),
+        false,
+        SliderAppearance::Filled,
+    )
 }
 
 pub(crate) fn slider_int(
@@ -17,6 +48,25 @@ pub(crate) fn slider_int(
     label: &str,
     value: &mut i32,
     range: core::ops::RangeInclusive<i32>,
+) -> bool {
+    slider_int_impl(ui, label, value, range, SliderAppearance::Grab)
+}
+
+pub(crate) fn filled_slider_int(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut i32,
+    range: core::ops::RangeInclusive<i32>,
+) -> bool {
+    slider_int_impl(ui, label, value, range, SliderAppearance::Filled)
+}
+
+fn slider_int_impl(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut i32,
+    range: core::ops::RangeInclusive<i32>,
+    appearance: SliderAppearance,
 ) -> bool {
     let mut v = *value as f32;
     let changed = slider_impl(
@@ -26,6 +76,7 @@ pub(crate) fn slider_int(
         *range.start() as f32,
         *range.end() as f32,
         true,
+        appearance,
     );
     if changed {
         *value = v as i32;
@@ -33,7 +84,6 @@ pub(crate) fn slider_int(
     changed
 }
 
-// Mouse delta over track width becomes value. Sub-pixel jitter in this function is why the fringe-width constant has a bodyguard.
 fn slider_impl(
     ui: &mut Ui,
     label: &str,
@@ -41,6 +91,7 @@ fn slider_impl(
     start: f32,
     end: f32,
     integer: bool,
+    appearance: SliderAppearance,
 ) -> bool {
     let ctx = &mut *ui.ctx;
     let id = super::widget_id(ctx, label);
@@ -52,21 +103,22 @@ fn slider_impl(
         (end, start)
     };
 
-    let height = ctx.font.line_height() + 2.0 * style.frame_padding[1];
-    let text_size = ctx.font.measure(display);
+    let face = ctx.active_font();
+    let height = ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
+    let text_size = ctx.font.measure_in(face, display);
     let available = super::available_width(ctx);
-    let track_w = if display.is_empty() {
+    let track_w = if appearance == SliderAppearance::Filled || display.is_empty() {
         available
     } else {
         available - text_size[0] - style.item_spacing[0]
     }
     .max(0.0);
-    let rect = super::item_rect(ctx, [available, height]);
+    let rect = super::interactive_rect(ctx, [available, height]);
     super::register_item(ctx, id, rect);
     let track = [rect[0], rect[1], rect[0] + track_w, rect[3]];
 
     let mouse = ctx.input.mouse_pos;
-    let inside = point_in_rect(mouse, track);
+    let inside = point_in_rect(mouse, ctx.target_rect(track));
     let left_down = ctx.input.mouse_down[0];
     let left_pressed = left_down && !ctx.prev_mouse_down[0];
     if inside && left_pressed {
@@ -74,6 +126,16 @@ fn slider_impl(
     }
     let held = ctx.active == Some(id);
     let mut changed = false;
+    if let Some(number) = ctx.semantic_number(id) {
+        let mut next = (number as f32).clamp(start, end);
+        if integer {
+            next = round_half_away_from_zero(next);
+        }
+        if next != *value {
+            *value = next;
+            changed = true;
+        }
+    }
     if held && left_down {
         let span = end - start;
         let t = if track_w > 0.0 {
@@ -117,6 +179,24 @@ fn slider_impl(
         style.widget_bg
     };
 
+    let grab_bg = ctx.widget_color(id, grab_bg);
+    ctx.request_cursor(
+        id,
+        track,
+        crate::host_requests::CursorShape::ResizeHorizontal,
+    );
+    if ctx.accessibility_enabled() {
+        use core::fmt::Write;
+        let mut semantic_value = super::FmtBuf::<64>::new();
+        let _ = write!(semantic_value, "{:.2}", *value);
+        ctx.id_stack.semantics.describe(
+            id,
+            crate::accessibility::AccessibilityRole::Slider,
+            semantic_value.as_str(),
+            0,
+            crate::accessibility::AccessibilityActions::SET_NUMBER,
+        );
+    }
     let (font, draw_list) = super::draw_parts(ctx);
     super::chrome_fill(
         font,
@@ -125,13 +205,41 @@ fn slider_impl(
         track,
         style.widget_bg,
     );
-    super::chrome_fill(
-        font,
-        draw_list,
-        style.corner_rounding,
-        [grab_x, track[1], grab_x + grab_w, track[3]],
-        grab_bg,
-    );
+    if appearance == SliderAppearance::Grab {
+        super::chrome_fill(
+            font,
+            draw_list,
+            style.corner_rounding,
+            [grab_x, track[1], grab_x + grab_w, track[3]],
+            grab_bg,
+        );
+    } else if t_cur > 0.0 && track_w > 0.0 {
+        let accent = if hovered {
+            style.widget_bg_hovered
+        } else {
+            style.widget_bg_active
+        };
+        let weight: u16 = if active {
+            4
+        } else if hovered {
+            3
+        } else {
+            2
+        };
+        let mut fill_color = [0; 4];
+        for channel in 0..4 {
+            fill_color[channel] = ((u16::from(style.widget_bg[channel]) * (4 - weight)
+                + u16::from(accent[channel]) * weight)
+                / 4) as u8;
+        }
+        super::chrome_fill(
+            font,
+            draw_list,
+            style.corner_rounding,
+            [track[0], track[1], track[0] + t_cur * track_w, track[3]],
+            fill_color,
+        );
+    }
     if style.border_size > 0.0 {
         draw_border(
             font,
@@ -150,18 +258,45 @@ fn slider_impl(
     }
     .expect("slider value text always fits 64 bytes");
     let value_text = value_text.as_str();
-    let value_size = font.measure(value_text);
-    let value_pos = [
-        track[0] + (track_w - value_size[0]) / 2.0,
-        rect[1] + (height - value_size[1]) / 2.0,
-    ];
-    draw_list.add_text(font, value_pos, value_text, style.text);
-    if !display.is_empty() {
-        let label_pos = [
-            track[2] + style.item_spacing[0],
-            rect[1] + (height - text_size[1]) / 2.0,
+    let value_size = font.measure_in(face, value_text);
+    if appearance == SliderAppearance::Filled {
+        let pad = style.frame_padding[0].max(0.0);
+        if track_w > 2.0 * pad {
+            draw_list.push_clip_rect([track[0] + pad, track[1], track[2] - pad, track[3]]);
+            let value_x = track[2] - pad - value_size[0];
+            draw_list.add_text(
+                font,
+                face,
+                [value_x, rect[1] + (height - value_size[1]) / 2.0],
+                value_text,
+                style.text,
+            );
+            if !display.is_empty()
+                && track[0] + pad + text_size[0] + style.item_spacing[0] <= value_x
+            {
+                draw_list.add_text(
+                    font,
+                    face,
+                    [track[0] + pad, rect[1] + (height - text_size[1]) / 2.0],
+                    display,
+                    style.text,
+                );
+            }
+            draw_list.pop_clip_rect();
+        }
+    } else {
+        let value_pos = [
+            track[0] + (track_w - value_size[0]) / 2.0,
+            rect[1] + (height - value_size[1]) / 2.0,
         ];
-        draw_list.add_text(font, label_pos, display, style.text);
+        draw_list.add_text(font, face, value_pos, value_text, style.text);
+        if !display.is_empty() {
+            let label_pos = [
+                track[2] + style.item_spacing[0],
+                rect[1] + (height - text_size[1]) / 2.0,
+            ];
+            draw_list.add_text(font, face, label_pos, display, style.text);
+        }
     }
     changed
 }
@@ -174,10 +309,20 @@ fn round_half_away_from_zero(x: f32) -> f32 {
     }
 }
 
+pub(crate) fn round_f64_to_i32(x: f64) -> i32 {
+    let rounded = if x >= 0.0 {
+        (x + 0.5) as i64
+    } else {
+        (x - 0.5) as i64
+    };
+    rounded.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ui::Ui;
     use crate::widgets::test_support::*;
+    use alloc::vec::Vec;
 
     const AWAY: [f32; 2] = [-50.0, -50.0];
 
@@ -202,6 +347,58 @@ mod tests {
             ui.slider_float("Vol", value, 0.0..=10.0);
         });
         track
+    }
+
+    #[test]
+    fn filled_slider_uses_full_row_and_bounds_its_fill() {
+        let mut ctx = test_context();
+        let mut value = 0.0;
+        let mut track = [0.0; 4];
+        frame(&mut ctx, AWAY, false, |ui| {
+            let pos = ui.ctx.current_window_mut().cursor.next_pos();
+            let width = ui.ctx.current_window_mut().cursor.available_width();
+            let height = ui.ctx.font.line_height() + 2.0 * ui.ctx.style.frame_padding[1];
+            track = [pos[0], pos[1], pos[0] + width, pos[1] + height];
+            assert!(!ui.filled_slider_float("Fill", &mut value, 0.0..=10.0));
+            assert_eq!(ui.ctx.last_item.unwrap().1, track);
+        });
+        let mid = center(track);
+        let mut changed = false;
+        frame(&mut ctx, mid, true, |ui| {
+            changed = ui.filled_slider_float("Fill", &mut value, 0.0..=10.0)
+        });
+        assert!(changed);
+        assert!((value - 5.0).abs() < 1e-3);
+        let bg = ctx.style.widget_bg;
+        let accent = ctx.style.widget_bg_active;
+        let fill_color = [accent[0], accent[1], accent[2], accent[3]];
+        let data = ctx.windows[0].draw_list.as_draw_data();
+        let fill_vertices: Vec<_> = data
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.col == fill_color)
+            .collect();
+        assert!(!fill_vertices.is_empty());
+        assert!(fill_vertices.iter().all(|vertex| vertex.pos[0] >= track[0]
+            && vertex.pos[0] <= mid[0]
+            && vertex.pos[1] >= track[1]
+            && vertex.pos[1] <= track[3]));
+        assert_ne!(bg, fill_color);
+        frame(&mut ctx, [track[2] + 100.0, mid[1]], true, |ui| {
+            changed = ui.filled_slider_float("Fill", &mut value, 0.0..=10.0)
+        });
+        assert!(changed);
+        assert_eq!(value, 10.0);
+    }
+
+    #[test]
+    fn filled_integer_slider_preserves_idle_host_value() {
+        let mut ctx = test_context();
+        let mut value = 7;
+        frame(&mut ctx, AWAY, false, |ui| {
+            assert!(!ui.filled_slider_int("Count", &mut value, 0..=10));
+        });
+        assert_eq!(value, 7);
     }
 
     #[test]
@@ -562,7 +759,9 @@ mod tests {
 
         let value_size = ctx.font.measure("5.00");
         let pen_x = track[0] + ((track[2] - track[0]) - value_size[0]) / 2.0;
-        let (_, quad) = ctx.font.glyph_quad('5', [pen_x, 0.0]);
+        let (_, quad) = ctx
+            .font
+            .glyph_quad(crate::font::FontId::DEFAULT, '5', [pen_x, 0.0]);
         let expected_min_x = quad.expect("'5' has ink").min[0];
         let actual_min_x =
             glyph_min_x_in(&ctx, track).expect("slider must emit its value text on the track");

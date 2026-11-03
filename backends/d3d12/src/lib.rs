@@ -1,7 +1,13 @@
+mod compositor;
 mod offscreen;
+pub use compositor::{BackdropCapture, PostProcessor, RenderTexture};
+pub use restricted_gui::rendering::{
+    AlphaMode, ColorMode, DrawOptimization, RenderStats, TextureEncoding, UploadStrategy,
+};
 mod pipeline;
 mod shader;
 mod texture;
+mod timing;
 
 use std::fmt;
 
@@ -170,6 +176,9 @@ impl Drop for FrameSync {
 }
 
 pub struct D3d12Backend {
+    sample_count: u32,
+    color_mode: ColorMode,
+    scale_factor: f32,
     device: Device,
     queue: Queue,
     sync: FrameSync,
@@ -185,6 +194,9 @@ impl D3d12Backend {
             queue: queue.clone(),
             sync,
             pipeline,
+            color_mode: ColorMode::Legacy,
+            scale_factor: 1.,
+            sample_count: 1,
         })
     }
 
@@ -246,6 +258,112 @@ impl D3d12Backend {
             .add_host_texture(&mut self.sync, id, rgba, width, height)
     }
 
+    pub fn add_gpu_texture(
+        &mut self,
+        id: TextureId,
+        resource: &ID3D12Resource,
+    ) -> Result<(), BackendError> {
+        self.pipeline.add_gpu_texture(&mut self.sync, id, resource)
+    }
+
+    pub fn set_scale_factor(&mut self, scale: f32) -> Result<(), BackendError> {
+        if !scale.is_finite() || scale <= 0. || scale > 8. {
+            return Err(BackendError::InvalidTextureData(
+                "invalid pixel density".into(),
+            ));
+        }
+        self.scale_factor = scale;
+        Ok(())
+    }
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
+    pub fn upload_strategy(&self) -> UploadStrategy {
+        UploadStrategy::PersistentMapped
+    }
+    pub fn stats(&self) -> RenderStats {
+        self.pipeline.stats()
+    }
+    pub fn reserve_upload_capacity(&mut self, bytes: u64) -> Result<(), BackendError> {
+        self.pipeline.reserve_upload_capacity(bytes)
+    }
+    pub fn set_upload_capacity(&mut self, bytes: u64) -> Result<(), BackendError> {
+        self.pipeline.set_upload_capacity(bytes)
+    }
+    pub fn trim_upload_pool(&mut self) {
+        self.pipeline.trim_upload_pool();
+    }
+
+    pub fn set_draw_optimization(&mut self, options: DrawOptimization) {
+        self.pipeline.set_draw_optimization(options);
+    }
+    pub fn draw_optimization(&self) -> DrawOptimization {
+        self.pipeline.draw_optimization()
+    }
+    pub fn set_alpha_mode(&mut self, mode: AlphaMode) {
+        self.pipeline.set_alpha_mode(mode);
+    }
+    pub fn alpha_mode(&self) -> AlphaMode {
+        self.pipeline.alpha_mode()
+    }
+    pub fn set_texture_alpha_mode(
+        &mut self,
+        id: TextureId,
+        mode: AlphaMode,
+    ) -> Result<(), BackendError> {
+        self.pipeline.set_texture_alpha_mode(id, mode)
+    }
+    pub fn set_sample_count(&mut self, samples: u32) -> Result<(), BackendError> {
+        self.pipeline.ensure_raster(samples)?;
+        self.sample_count = samples;
+        Ok(())
+    }
+    pub fn sample_count(&self) -> u32 {
+        self.sample_count
+    }
+    pub fn shader_sources() -> (&'static str, &'static str) {
+        (shader::VERTEX_SHADER_SOURCE, shader::PIXEL_SHADER_SOURCE)
+    }
+    pub fn reload_shaders(&mut self, vertex: &str, pixel: &str) -> Result<(), BackendError> {
+        self.pipeline.reload_shaders(&self.sync, vertex, pixel)
+    }
+    pub fn set_color_mode(&mut self, mode: ColorMode) {
+        self.color_mode = mode;
+    }
+    pub fn color_mode(&self) -> ColorMode {
+        self.color_mode
+    }
+    pub fn upload_color_font_atlas(
+        &mut self,
+        font: &restricted_gui::font::Font,
+    ) -> Result<(), BackendError> {
+        let Some(id) = font.color_atlas_texture() else {
+            return Ok(());
+        };
+        let (rgba, w, h) = font.color_atlas_pixels();
+        if rgba.is_empty() {
+            return Ok(());
+        }
+        let encoding = if self.color_mode == ColorMode::Srgb {
+            TextureEncoding::Srgb
+        } else {
+            TextureEncoding::Linear
+        };
+        self.add_host_texture_encoded(id, rgba, w, h, encoding)
+    }
+    pub fn add_host_texture_encoded(
+        &mut self,
+        id: TextureId,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        encoding: TextureEncoding,
+    ) -> Result<(), BackendError> {
+        self.pipeline
+            .add_host_texture_encoded(&mut self.sync, id, rgba, width, height, encoding)
+    }
+
     pub fn render(
         &mut self,
         draw_data: &DrawData,
@@ -254,15 +372,24 @@ impl D3d12Backend {
         viewport_size: [f32; 2],
     ) -> Result<(), BackendError> {
         let _ = target;
-        self.pipeline
-            .render(&mut self.sync, draw_data, rtv, viewport_size)
+        self.pipeline.render(
+            &mut self.sync,
+            draw_data,
+            rtv,
+            viewport_size,
+            pipeline::RenderOptions {
+                color_mode: self.color_mode,
+                scale_factor: self.scale_factor,
+                sample_count: self.sample_count,
+                ..Default::default()
+            },
+        )
     }
 
     pub fn retirement_queue_len(&self) -> usize {
         self.pipeline.retirement_queue_len()
     }
 
-    // A counter that exists purely so tests can prove we never stall the whole GPU in steady state. Paranoia, but make it observable.
     pub fn full_idle_wait_count(&self) -> u64 {
         self.pipeline.full_idle_wait_count()
     }

@@ -3,59 +3,21 @@ use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::ID3DBlob;
 
 use crate::BackendError;
+#[path = "../../shaders/shader_interface.rs"]
+pub(crate) mod interface;
 
-// Shader source embedded as a string and compiled at startup. Runtime shader compilation is normally a sin; here it is one less file to lose inside an injected process.
 pub(crate) const VS_ENTRY: &std::ffi::CStr = c"main";
 pub(crate) const VS_TARGET: &std::ffi::CStr = c"vs_4_0";
 pub(crate) const PS_ENTRY: &std::ffi::CStr = c"main";
 pub(crate) const PS_TARGET: &std::ffi::CStr = c"ps_4_0";
 
-pub(crate) const VERTEX_SHADER_SOURCE: &str = r"
-cbuffer vertexBuffer : register(b0)
-{
-    float4x4 ProjectionMatrix;
-};
+pub(crate) const VERTEX_SHADER_SOURCE: &str = include_str!("../../shaders/gui.vert.hlsl");
 
-struct VS_INPUT
-{
-    float2 pos : POSITION;
-    float2 uv  : TEXCOORD0;
-    float4 col : COLOR0;
-};
-
-struct PS_INPUT
-{
-    float4 pos : SV_POSITION;
-    float4 col : COLOR0;
-    float2 uv  : TEXCOORD0;
-};
-
-PS_INPUT main(VS_INPUT input)
-{
-    PS_INPUT output;
-    output.pos = mul(ProjectionMatrix, float4(input.pos.xy, 0.0f, 1.0f));
-    output.col = input.col;
-    output.uv  = input.uv;
-    return output;
-}
-";
-
-pub(crate) const PIXEL_SHADER_SOURCE: &str = r"
-struct PS_INPUT
-{
-    float4 pos : SV_POSITION;
-    float4 col : COLOR0;
-    float2 uv  : TEXCOORD0;
-};
-
-sampler sampler0 : register(s0);
-Texture2D texture0 : register(t0);
-
-float4 main(PS_INPUT input) : SV_Target
-{
-    return input.col * texture0.Sample(sampler0, input.uv);
-}
-";
+pub(crate) const PIXEL_SHADER_SOURCE: &str = concat!(
+    include_str!("../../shaders/blue_noise.hlsl"),
+    include_str!("../../shaders/gui.frag.hlsl"),
+    include_str!("../../shaders/surface.hlsl")
+);
 
 pub(crate) fn compile(
     source: &str,

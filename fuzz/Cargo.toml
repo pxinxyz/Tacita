@@ -1,0 +1,51 @@
+[package]
+name = "restricted-gui-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.restricted-gui]
+path = "../core"
+
+[[bin]]
+name = "font_bytes"
+path = "fuzz_targets/font_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ui_frames"
+path = "fuzz_targets/ui_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_loader"
+path = "fuzz_targets/config_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "theme_parser"
+path = "fuzz_targets/theme_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layout_loader"
+path = "fuzz_targets/layout_loader.rs"
+test = false
+doc = false
+bench = false

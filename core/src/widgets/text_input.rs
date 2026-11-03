@@ -11,13 +11,25 @@ const BLINK_PERIOD: f32 = 1.0;
 const CURSOR_WIDTH: f32 = 1.0;
 
 pub(crate) fn text_input(ui: &mut Ui, label: &str, buf: &mut String) -> bool {
+    text_input_impl(ui, label, buf, true)
+}
+
+pub(crate) fn embedded_text_input(ui: &mut Ui, label: &str, buf: &mut String) -> bool {
+    text_input_impl(ui, label, buf, false)
+}
+
+fn text_input_impl(ui: &mut Ui, label: &str, buf: &mut String, draw_chrome: bool) -> bool {
+    if buf.len() > crate::editing::MAX_EDIT_BYTES || buf.contains('\0') {
+        return false;
+    }
     let ctx = &mut *ui.ctx;
     let id = super::widget_id(ctx, label);
     let display = split_label(label).0;
     let style = ctx.style;
+    let face = ctx.active_font();
 
-    let height = ctx.font.line_height() + 2.0 * style.frame_padding[1];
-    let text_size = ctx.font.measure(display);
+    let height = ctx.font.line_height_in(face) + 2.0 * style.frame_padding[1];
+    let text_size = ctx.font.measure_in(face, display);
     let available = super::available_width(ctx);
     let field_w = if display.is_empty() {
         available
@@ -25,16 +37,21 @@ pub(crate) fn text_input(ui: &mut Ui, label: &str, buf: &mut String) -> bool {
         available - text_size[0] - style.item_spacing[0]
     }
     .max(0.0);
-    let rect = super::item_rect(ctx, [available, height]);
-    super::register_item(ctx, id, rect);
+    let rect = super::interactive_rect(ctx, [available, height]);
+    super::register_focusable_item(ctx, id, rect);
     let field = [rect[0], rect[1], rect[0] + field_w, rect[3]];
 
+    ctx.request_cursor(id, field, crate::host_requests::CursorShape::Text);
+
     let mouse = ctx.input.mouse_pos;
-    let inside = point_in_rect(mouse, field);
+    let inside = point_in_rect(mouse, ctx.target_rect(field));
     let left_down = ctx.input.mouse_down[0];
     let left_pressed = left_down && !ctx.prev_mouse_down[0];
 
     let clicked_in = left_pressed && inside;
+    if ctx.focused == Some(id) && ctx.active.is_none() && !left_pressed {
+        ctx.set_active(id);
+    }
     if left_pressed {
         if inside {
             ctx.set_active(id);
@@ -49,95 +66,201 @@ pub(crate) fn text_input(ui: &mut Ui, label: &str, buf: &mut String) -> bool {
     }
     let mut focused = ctx.active == Some(id);
 
-    let (mut cursor, mut scroll_x, mut blink) = match ctx.widget_states.get(&id) {
-        Some(WidgetState::TextInput(s)) => (s.cursor, s.scroll_x, s.blink),
-        _ => (buf.len(), 0.0, 0.0),
-    };
     let had_state = ctx.widget_states.contains_key(&id);
-    if cursor > buf.len() {
-        cursor = buf.len();
+    let (mut editor, mut scroll_x, mut blink, old_hash) = match ctx.widget_states.get_mut(&id) {
+        Some(WidgetState::TextInput(s)) => {
+            let mut editor = s
+                .editor
+                .take()
+                .unwrap_or_else(|| alloc::boxed::Box::new(crate::editing::TextEditor::default()));
+            editor.cursor = s.cursor;
+            (editor, s.scroll_x, s.blink, s.text_hash)
+        }
+        _ => (
+            alloc::boxed::Box::new(crate::editing::TextEditor::default()),
+            0.,
+            0.,
+            0,
+        ),
+    };
+    let hash = buf.bytes().fold(14695981039346656037u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(1099511628211)
+    });
+    core::mem::swap(buf, &mut editor.text);
+    if hash != old_hash {
+        editor.revision = editor.revision.wrapping_add(1);
+        editor.cancel_composition();
     }
-    while !buf.is_char_boundary(cursor) {
-        cursor -= 1;
+    if !had_state {
+        editor.cursor = editor.text.len();
+        editor.anchor = editor.cursor;
     }
+    editor.cursor = crate::editing::model::snap(&editor.text, editor.cursor);
+    editor.anchor = crate::editing::model::snap(&editor.text, editor.anchor);
     if focused {
         blink = (blink + ctx.dt) % BLINK_PERIOD;
+    } else {
+        editor.cancel_composition();
+        editor.dragging = false;
     }
-
     let text_x = field[0] + style.frame_padding[0];
-    let inner_w = (field_w - 2.0 * style.frame_padding[0]).max(0.0);
-
-    if clicked_in {
-        cursor = byte_index_at_x(&mut ctx.font, buf, mouse[0] - (text_x - scroll_x));
-        blink = 0.0;
+    let inner_w = (field_w - 2. * style.frame_padding[0]).max(0.);
+    if clicked_in || focused && editor.dragging && left_down {
+        editor.cancel_composition();
+        editor.cursor = crate::editing::model::snap(
+            &editor.text,
+            byte_index_at_x(
+                &mut ctx.font,
+                face,
+                &editor.text,
+                mouse[0] - (text_x - scroll_x),
+            ),
+        );
+        if !editor.dragging && !ctx.modifiers.shift {
+            editor.anchor = editor.cursor;
+        }
+        editor.dragging = true;
+        blink = 0.;
     }
-
+    if !left_down {
+        editor.dragging = false;
+    }
     let mut changed = false;
     if focused {
-        let mut i = 0;
-        while i < ctx.input.keys.len() {
-            let event = ctx.input.keys[i];
-            i += 1;
-            match event {
-                KeyEvent::Char(c) => {
-                    // Reject control chars so Enter doesn't become a newline in a single-line box. The OS calls them valid input. The widget disagrees.
-                    if c.is_control() {
-                        continue;
+        let mut n = 0;
+        while n < ctx.text_host.events.len() {
+            let owner = match &ctx.text_host.events[n] {
+                crate::editing::Event::Ime { owner, .. }
+                | crate::editing::Event::Clipboard { owner, .. } => *owner,
+            };
+            if owner != id {
+                n += 1;
+                continue;
+            }
+            match ctx.text_host.events.remove(n) {
+                crate::editing::Event::Ime {
+                    kind, text, cursor, ..
+                } => match kind {
+                    crate::editing::TextEventKind::Preedit
+                    | crate::editing::TextEventKind::PreeditHidden
+                        if !text.chars().any(crate::editing::model::is_line_break) =>
+                    {
+                        let _ = editor.set_preedit(&text, cursor);
+                        editor.preedit_visible =
+                            kind != crate::editing::TextEventKind::PreeditHidden;
                     }
-                    buf.insert(cursor, c);
-                    cursor += c.len_utf8();
-                    changed = true;
-                    blink = 0.0;
-                }
-                KeyEvent::Press(Key::Backspace) => {
-                    blink = 0.0;
-                    if cursor > 0 {
-                        let prev = prev_boundary(buf, cursor);
-                        buf.replace_range(prev..cursor, "");
-                        cursor = prev;
-                        changed = true;
+                    crate::editing::TextEventKind::Commit
+                        if !text.chars().any(crate::editing::model::is_line_break) =>
+                    {
+                        changed |= editor.commit(&text).unwrap_or(false)
                     }
-                }
-                KeyEvent::Press(Key::Delete) => {
-                    blink = 0.0;
-                    if cursor < buf.len() {
-                        let next = next_boundary(buf, cursor);
-                        buf.replace_range(cursor..next, "");
-                        changed = true;
+                    _ => editor.cancel_composition(),
+                },
+                crate::editing::Event::Clipboard {
+                    action,
+                    text,
+                    range,
+                    revision,
+                    ..
+                } if editor.revision == revision && editor.selection() == range => {
+                    if action == crate::editing::ClipboardAction::Cut {
+                        changed |= editor.insert("").unwrap_or(false);
+                    } else if action == crate::editing::ClipboardAction::Paste
+                        && !text.chars().any(crate::editing::model::is_line_break)
+                    {
+                        changed |= editor.insert(&text).unwrap_or(false);
                     }
-                }
-                KeyEvent::Press(Key::Left) => {
-                    blink = 0.0;
-                    if cursor > 0 {
-                        cursor = prev_boundary(buf, cursor);
-                    }
-                }
-                KeyEvent::Press(Key::Right) => {
-                    blink = 0.0;
-                    if cursor < buf.len() {
-                        cursor = next_boundary(buf, cursor);
-                    }
-                }
-                KeyEvent::Press(Key::Home) => {
-                    blink = 0.0;
-                    cursor = 0;
-                }
-                KeyEvent::Press(Key::End) => {
-                    blink = 0.0;
-                    cursor = buf.len();
-                }
-                KeyEvent::Press(Key::Enter) | KeyEvent::Press(Key::Escape) => {
-                    ctx.clear_active();
-                    focused = false;
-                    blink = 0.0;
-                    break;
                 }
                 _ => {}
             }
+            blink = 0.;
+        }
+        let mut modifiers = ctx.routing.initial_modifiers;
+        for i in 0..ctx.input.keys.len() {
+            match ctx.input.keys[i] {
+                KeyEvent::Press(Key::Ctrl) => modifiers.ctrl = true,
+                KeyEvent::Release(Key::Ctrl) => modifiers.ctrl = false,
+                KeyEvent::Press(Key::Shift) => modifiers.shift = true,
+                KeyEvent::Release(Key::Shift) => modifiers.shift = false,
+                KeyEvent::Press(Key::Alt) => modifiers.alt = true,
+                KeyEvent::Release(Key::Alt) => modifiers.alt = false,
+                KeyEvent::Press(Key::A) if modifiers.ctrl => editor.select_all(),
+                KeyEvent::Press(key @ (Key::C | Key::X | Key::V)) if modifiers.ctrl => {
+                    let action = match key {
+                        Key::C => crate::editing::ClipboardAction::Copy,
+                        Key::X => crate::editing::ClipboardAction::Cut,
+                        _ => crate::editing::ClipboardAction::Paste,
+                    };
+                    ctx.text_host.request(
+                        id,
+                        action,
+                        editor.selected_text(),
+                        editor.selection(),
+                        editor.revision,
+                    );
+                }
+                KeyEvent::Char(c)
+                    if !c.is_control()
+                        && !crate::editing::model::is_line_break(c)
+                        && !modifiers.ctrl
+                        && !modifiers.alt
+                        && !editor.composing() =>
+                {
+                    let mut bytes = [0; 4];
+                    changed |= editor.insert(c.encode_utf8(&mut bytes)).unwrap_or(false);
+                }
+                KeyEvent::Press(Key::Backspace) if !editor.composing() => {
+                    changed |= editor.backspace()
+                }
+                KeyEvent::Press(Key::Delete) if !editor.composing() => changed |= editor.delete(),
+                KeyEvent::Press(Key::Left) if !editor.composing() => {
+                    editor.move_logical(false, modifiers.shift)
+                }
+                KeyEvent::Press(Key::Right) if !editor.composing() => {
+                    editor.move_logical(true, modifiers.shift)
+                }
+                KeyEvent::Press(key @ (Key::Home | Key::End)) if !editor.composing() => {
+                    editor.cursor = if key == Key::Home {
+                        0
+                    } else {
+                        editor.text.len()
+                    };
+                    if !modifiers.shift {
+                        editor.anchor = editor.cursor;
+                    }
+                }
+                KeyEvent::Press(Key::Escape) if editor.composing() => editor.cancel_composition(),
+                KeyEvent::Press(Key::Enter | Key::Escape) if !editor.composing() => {
+                    ctx.clear_active();
+                    ctx.focused = None;
+                    ctx.focused_in_modal = false;
+                    ctx.focused_in_popup = false;
+                    focused = false;
+                    blink = 0.;
+                    break;
+                }
+                KeyEvent::Release(_) => continue,
+                _ => continue,
+            }
+            blink = 0.;
         }
     }
-
-    let cursor_x = ctx.font.measure(&buf[..cursor])[0];
+    let cursor = editor.cursor;
+    let display_cursor = if let Some(r) = &editor.composition_range {
+        editor.display.clear();
+        editor.display.push_str(&editor.text[..r.start]);
+        editor.display.push_str(&editor.preedit);
+        editor.display.push_str(&editor.text[r.end..]);
+        r.start + editor.preedit_cursor.end
+    } else {
+        cursor
+    };
+    let rendered = if editor.composing() {
+        editor.display.as_str()
+    } else {
+        editor.text.as_str()
+    };
+    let cursor_x = ctx.font.measure_in(face, &rendered[..display_cursor])[0];
     if focused {
         if cursor_x - scroll_x > inner_w {
             scroll_x = cursor_x - inner_w;
@@ -150,44 +273,73 @@ pub(crate) fn text_input(ui: &mut Ui, label: &str, buf: &mut String) -> bool {
         }
     }
 
-    if focused || had_state {
-        ctx.widget_states.insert(
-            id,
-            WidgetState::TextInput(TextInputState {
-                cursor,
-                scroll_x,
-                blink,
-            }),
-        );
+    if focused {
+        ctx.text_host.caret = Some(crate::editing::TextCaret {
+            owner: id,
+            rect: [
+                text_x - scroll_x + cursor_x,
+                rect[1] + style.frame_padding[1],
+                text_x - scroll_x + cursor_x + 1.,
+                rect[1] + style.frame_padding[1] + ctx.font.line_height_in(face),
+            ],
+            composing: editor.composing(),
+        });
     }
-
+    let field_bg = if focused {
+        style.widget_bg_active
+    } else if hovered {
+        style.widget_bg_hovered
+    } else {
+        style.widget_bg
+    };
+    let field_bg = if ctx.motion.active() {
+        ctx.widget_color(id, field_bg)
+    } else {
+        style.widget_bg
+    };
     let (font, draw_list) = super::draw_parts(ctx);
-    super::chrome_fill(
-        font,
-        draw_list,
-        style.corner_rounding,
-        field,
-        style.widget_bg,
-    );
-    if style.border_size > 0.0 {
-        draw_border(
-            font,
-            draw_list,
-            style.corner_rounding,
-            field,
-            style.border_size,
-            lighten(style.widget_bg, BORDER_LIGHTEN),
-        );
+    if draw_chrome {
+        super::chrome_fill(font, draw_list, style.corner_rounding, field, field_bg);
+        if style.border_size > 0.0 {
+            draw_border(
+                font,
+                draw_list,
+                style.corner_rounding,
+                field,
+                style.border_size,
+                lighten(style.widget_bg, BORDER_LIGHTEN),
+            );
+        }
     }
     draw_list.push_clip_rect(field);
     let text_pos = [text_x - scroll_x, rect[1] + style.frame_padding[1]];
-    draw_list.add_text(font, text_pos, buf, style.text);
-    if focused && blink % BLINK_PERIOD < BLINK_PERIOD / 2.0 {
+    let selection = editor
+        .composition_range
+        .clone()
+        .map(|r| r.start..r.start + editor.preedit.len())
+        .unwrap_or_else(|| editor.selection());
+    if !selection.is_empty() {
+        let x0 = text_pos[0] + font.measure_in(face, &rendered[..selection.start])[0];
+        let x1 = text_pos[0] + font.measure_in(face, &rendered[..selection.end])[0];
+        let y1 = text_pos[1] + font.line_height_in(face);
+        if editor.composing() {
+            draw_list.add_filled_rect([x0, y1 - 1.], [x1, y1], style.text);
+        } else {
+            let mut color = style.widget_bg_hovered;
+            color[3] = 160;
+            draw_list.add_filled_rect([x0, text_pos[1]], [x1, y1], color);
+        }
+    }
+    draw_list.add_text(font, face, text_pos, rendered, style.text);
+    if focused
+        && blink % BLINK_PERIOD < BLINK_PERIOD / 2.0
+        && (!editor.composing() || editor.preedit_visible)
+    {
         let cx = text_pos[0] + cursor_x;
         let y0 = rect[1] + style.frame_padding[1];
         draw_list.add_filled_rect(
             [cx, y0],
-            [cx + CURSOR_WIDTH, y0 + font.line_height()],
+            [cx + CURSOR_WIDTH, y0 + font.line_height_in(face)],
             style.text,
         );
     }
@@ -197,38 +349,49 @@ pub(crate) fn text_input(ui: &mut Ui, label: &str, buf: &mut String) -> bool {
             field[2] + style.item_spacing[0],
             rect[1] + (height - text_size[1]) / 2.0,
         ];
-        draw_list.add_text(font, label_pos, display, style.text);
+        draw_list.add_text(font, face, label_pos, display, style.text);
+    }
+    let text_hash = editor.text.bytes().fold(14695981039346656037u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(1099511628211)
+    });
+    core::mem::swap(buf, &mut editor.text);
+    ctx.id_stack.semantics.describe(
+        id,
+        crate::accessibility::AccessibilityRole::TextInput,
+        buf,
+        0,
+        crate::accessibility::AccessibilityActions::FOCUS,
+    );
+    {
+        ctx.widget_states.insert(
+            id,
+            WidgetState::TextInput(TextInputState {
+                cursor,
+                scroll_x,
+                blink,
+                editor: Some(editor),
+                text_hash,
+            }),
+        );
     }
     changed
 }
 
-fn byte_index_at_x(font: &mut crate::font::Font, text: &str, rel_x: f32) -> usize {
+fn byte_index_at_x(
+    font: &mut crate::font::Font,
+    face: crate::font::FontId,
+    text: &str,
+    rel_x: f32,
+) -> usize {
     let mut pen = 0.0f32;
     for (i, ch) in text.char_indices() {
-        let advance = font.glyph_quad(ch, [0.0; 2]).0[0];
+        let advance = font.glyph_quad(face, ch, [0.0; 2]).0[0];
         if rel_x < pen + advance / 2.0 {
             return i;
         }
         pen += advance;
     }
     text.len()
-}
-
-fn prev_boundary(buf: &str, cursor: usize) -> usize {
-    buf[..cursor]
-        .char_indices()
-        .next_back()
-        .map(|(i, _)| i)
-        .unwrap_or(0)
-}
-
-fn next_boundary(buf: &str, cursor: usize) -> usize {
-    cursor
-        + buf[cursor..]
-            .chars()
-            .next()
-            .expect("next_boundary requires cursor < buf.len()")
-            .len_utf8()
 }
 
 #[cfg(test)]
@@ -245,7 +408,7 @@ mod tests {
     fn keyed(mouse_pos: [f32; 2], left_down: bool, keys: &[KeyEvent]) -> InputState<'_> {
         InputState {
             mouse_pos,
-            mouse_down: [left_down, false, false],
+            mouse_down: [left_down, false, false, false, false],
             mouse_wheel: 0.0,
             keys,
             viewport_size: [0.0, 0.0],
@@ -579,6 +742,7 @@ mod tests {
             },
         );
         assert_eq!(ctx.active, None, "Enter must unfocus");
+        assert_eq!(ctx.focused, None);
 
         let mut changed = true;
         frame_with_input(
@@ -603,6 +767,7 @@ mod tests {
             },
         );
         assert_eq!(ctx.active, None, "Escape must unfocus");
+        assert_eq!(ctx.focused, None);
     }
 
     #[test]

@@ -1,3 +1,27 @@
 [workspace]
 resolver = "2"
-members = ["core", "demo", "sdk", "ffi", "backends/d3d11", "backends/d3d12", "adapters/win32"]
+members = ["core", "demo", "sdk", "ffi", "host", "backends/d3d11", "backends/d3d12", "adapters/win32"]
+
+# Debug builds of the library are optimized; debug builds of the workspace's
+# own binaries/tests are not.
+#
+# Rationale, measured (see the perf investigation): a debug `restricted-gui`
+# runs its declaration + render path ~7x slower than an optimized one, which
+# dominated the demo's debug frame time and made "eyeball it on a real GPU"
+# — the demo's entire reason to exist — misrepresent the library's real cost.
+# The library is exercised only through its public data API, so optimizing it
+# does not impair stepping through the code that developers actually debug
+# here (the demo, the backends, the FFI wrapper, the tests), and `debug = true`
+# is inherited from the profile, so the library still carries full debug info
+# and shows up in backtraces.
+#
+# `opt-level = 2`, not 3: measured indistinguishable on this path, and 2
+# compiles faster.
+[profile.dev.package.restricted-gui]
+opt-level = 2
+
+# Third-party dependencies are never the thing under debug here (fontdue's
+# rasterizer and wgpu/naga's shader front end are both hot in debug), so they
+# are optimized too.
+[profile.dev.package."*"]
+opt-level = 2

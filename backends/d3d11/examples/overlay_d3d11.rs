@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use restricted_gui::context::Context;
 use restricted_gui::input::KeyBinding;
+use restricted_gui::ScrollFlags;
 use restricted_gui_d3d11::D3d11Backend;
 use restricted_gui_win32::Win32InputAdapter;
 
@@ -25,8 +26,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW,
     WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT,
-    WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
-    WNDCLASS_STYLES, WS_OVERLAPPEDWINDOW,
+    WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WNDCLASS_STYLES,
+    WS_OVERLAPPEDWINDOW,
 };
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
@@ -81,26 +83,23 @@ fn handle_message(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> bool {
-    // Focus-loss hygiene: without this, a button released while Alt-Tabbed stays "held" forever and your slider develops a mind of its own.
     if msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED {
         input.borrow_mut().adapter.clear_held();
         return false;
     }
     match msg {
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_RBUTTONDOWN | WM_RBUTTONDBLCLK | WM_MBUTTONDOWN
-        | WM_MBUTTONDBLCLK => {
+        | WM_MBUTTONDBLCLK | WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => {
             input.borrow_mut().held_buttons += 1;
-            // SetCapture so drags keep tracking outside the client area. In an injected overlay you do NOT do this to the game window -- here we own the window and the consequences.
             unsafe { SetCapture(hwnd) };
         }
-        WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
+        WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => {
             let all_released = {
                 let mut input = input.borrow_mut();
                 input.held_buttons = input.held_buttons.saturating_sub(1);
                 input.held_buttons == 0
             };
             if all_released {
-                // ReleaseCapture synchronously re-enters this wndproc via WM_CAPTURECHANGED. Ask me how I found out. (Frame ~4020. A RefCell panic. It was a whole thing.)
                 let _ = unsafe { ReleaseCapture() };
             }
         }
@@ -166,7 +165,7 @@ fn create_backbuffer_rtv(
 
 fn declare_panel(ctx: &mut Context, state: &mut DemoState) {
     let mut ui = ctx.ui();
-    ui.window("restricted-gui — D3D11 overlay", |ui| {
+    ui.window("restricted-gui — D3D11 overlay", ScrollFlags::BAR, |ui| {
         ui.tab_bar("tabs##overlay", |bar| {
             bar.tab("Widgets", |ui| {
                 ui.label(&state.fps_text);
@@ -184,12 +183,15 @@ fn declare_panel(ctx: &mut Context, state: &mut DemoState) {
                 }
                 ui.text_input("Text", &mut state.text);
                 ui.label("Log (scroll region):");
-                ui.scroll_region("log##overlay", [280.0, 150.0], |ui| {
+                ui.scroll_region("log##overlay", [268.0, 150.0], |ui| {
                     for i in 1..=LOG_LINES {
                         ui.label(&format!("log line {i:02}: the quick brown fox"));
                     }
                 });
-                ui.tooltip_text("Wheel over the region scrolls it.");
+                ui.tooltip_text(
+                    "Wheel over the region scrolls it; wheel anywhere else\n\
+                     scrolls the window (declared ScrollFlags::BAR).",
+                );
             });
             bar.tab("Settings", |ui| {
                 ui.combo("Combo", &COMBO_ITEMS, &mut state.combo);
