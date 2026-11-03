@@ -1,8 +1,10 @@
 ![Tacita](banner.png)
 
-[![Conventional Commits](https://img.shields.io/badge/Conventional_Commits-1.0.0-4c566a?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/en/v1.0.0/)
-[![Rust 2021](https://img.shields.io/badge/Rust-2021-4c566a?logo=rust&logoColor=white)](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
-[![License: MIT](https://img.shields.io/badge/License-MIT-4c566a)](LICENSE)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-4c566a" alt="License: MIT"></a>
+  <a href="https://www.conventionalcommits.org/en/v1.0.0/"><img src="https://img.shields.io/badge/Conventional_Commits-1.0.0-4c566a?logo=conventionalcommits&amp;logoColor=white" alt="Conventional Commits"></a>
+  <a href="https://doc.rust-lang.org/edition-guide/rust-2021/index.html"><img src="https://img.shields.io/badge/Rust-2021-4c566a?logo=rust&amp;logoColor=white" alt="Rust 2021"></a>
+</p>
 
 Tacita is an immediate mode GUI framework written in Rust.
 The application declares controls each frame.
