@@ -14,6 +14,8 @@ The application owns its window, graphics device, and swap chain.
 Tacita produces draw data for a renderer.
 The core uses `no_std` with `alloc`.
 
+The recording shows the demo controls and rendering.
+
 https://github.com/user-attachments/assets/bd03ed00-9938-4251-9c3e-171547b80d83
 
 ## Features
@@ -36,7 +38,7 @@ These commands run from the repository root.
 Cargo starts the wgpu demo:
 
 ```sh
-cargo run --locked -p tacita-demo
+cargo run --locked --release -p tacita-demo
 ```
 
 The demo starts on the Overview page.
@@ -44,16 +46,20 @@ The sidebar provides 14 pages.
 The search box filters the sidebar.
 The status bar reports measured frame and renderer data.
 
+The demo limits its frame rate to 60 FPS by default.
+Disable **Limit frame rate** on the Appearance page to remove this cap.
+The renderer also enables vsync.
+
 The page option selects a page at startup:
 
 ```sh
-cargo run --locked -p tacita-demo -- --page Controls
+cargo run --locked --release -p tacita-demo -- --page Controls
 ```
 
 The capture option saves a PNG and closes the demo:
 
 ```sh
-cargo run --locked -p tacita-demo -- --page Overview --capture overview.png
+cargo run --locked --release -p tacita-demo -- --page Overview --capture overview.png
 ```
 
 The native accessibility bridge requires the `--native-accessibility` option.
