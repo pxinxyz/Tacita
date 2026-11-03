@@ -1,5 +1,5 @@
 use crate::{Gui, Id, Navigation, Shortcut};
-use restricted_gui::persistence::{LayoutSnapshot, StateError};
+use tacita::persistence::{LayoutSnapshot, StateError};
 impl Gui {
     pub fn navigate(&mut self, event: Navigation) -> bool {
         self.ctx.navigate(event)

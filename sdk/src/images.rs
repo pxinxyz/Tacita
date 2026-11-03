@@ -1,5 +1,5 @@
 use crate::Gui;
-use restricted_gui::images::{ImageError, ImageFit, ImageRegion, NineSlice};
+use tacita::images::{ImageError, ImageFit, ImageRegion, NineSlice};
 impl Gui {
     pub fn image(
         &mut self,
@@ -43,7 +43,7 @@ impl Gui {
 impl crate::Gui {
     pub fn update_display_metrics(
         &mut self,
-        metrics: restricted_gui::display::DisplayMetrics,
+        metrics: tacita::display::DisplayMetrics,
     ) -> Result<bool, crate::FontError> {
         self.ctx.update_display_metrics(metrics)
     }

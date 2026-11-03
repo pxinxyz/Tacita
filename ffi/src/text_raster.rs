@@ -1,5 +1,5 @@
 use crate::{gui_export, GuiContext, GuiErrorCode};
-use restricted_gui::font::TextRasterMode;
+use tacita::font::TextRasterMode;
 
 pub const GUI_TEXT_RASTER_LEGACY: u32 = 0;
 pub const GUI_TEXT_RASTER_SUBPIXEL: u32 = 1;

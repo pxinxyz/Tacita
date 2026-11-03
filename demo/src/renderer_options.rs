@@ -265,9 +265,9 @@ impl Renderer {
     pub(super) fn command_alpha(
         &self,
         texture: TextureId,
-        effect: restricted_gui::effects::DrawEffects,
+        effect: tacita::effects::DrawEffects,
     ) -> u32 {
-        restricted_gui::rendering::alpha_flags(
+        tacita::rendering::alpha_flags(
             self.texture_alpha_mode(texture),
             self.alpha_mode,
             self.texture_alpha_mode(effect.mask_texture(3).unwrap_or(TextureId::WHITE)),

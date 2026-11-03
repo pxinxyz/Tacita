@@ -1,5 +1,5 @@
 use crate::{BackendError, D3d11Backend};
-use restricted_gui::{
+use tacita::{
     draw::TextureId,
     effects::{FilterPlan, MAX_FILTER_PASSES},
 };
@@ -328,7 +328,7 @@ impl RenderTexture {
         mode: crate::ColorMode,
         samples: u32,
     ) -> Result<Self, BackendError> {
-        if !restricted_gui::rendering::valid_sample_count(samples) {
+        if !tacita::rendering::valid_sample_count(samples) {
             return Err(BackendError::InvalidTextureData(
                 "sample count must be 1, 2, 4 or 8".into(),
             ));
@@ -394,7 +394,7 @@ impl RenderTexture {
     pub fn render(
         &self,
         backend: &mut D3d11Backend,
-        draw: &restricted_gui::draw::DrawData,
+        draw: &tacita::draw::DrawData,
         clear: [f32; 4],
     ) -> Result<(), BackendError> {
         let aliases = |id: TextureId| {

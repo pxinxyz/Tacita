@@ -39,7 +39,7 @@ pub(super) fn texture_alpha(modes: &[(TextureId, AlphaMode)], id: TextureId) -> 
         .find(|(key, _)| *key == id)
         .map_or(AlphaMode::Straight, |(_, mode)| *mode)
 }
-pub(super) fn instance_bytes(values: &[restricted_gui::rendering::QuadInstance]) -> &[u8] {
+pub(super) fn instance_bytes(values: &[tacita::rendering::QuadInstance]) -> &[u8] {
     unsafe {
         std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), core::mem::size_of_val(values))
     }
@@ -101,7 +101,7 @@ fn build_raster(
     })
 }
 pub(crate) fn check_samples(device: &Device, samples: u32) -> Result<(), BackendError> {
-    if !restricted_gui::rendering::valid_sample_count(samples) {
+    if !tacita::rendering::valid_sample_count(samples) {
         return Err(BackendError::InvalidTextureData(
             "sample count must be 1, 2, 4 or 8".into(),
         ));

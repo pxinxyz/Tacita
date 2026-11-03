@@ -4,7 +4,7 @@ use crate::{
     gui_export, slice_arg, str_arg, ContainerScope, GuiContext, GuiErrorCode, GuiStr, GuiVec2,
     WindowState,
 };
-use restricted_gui::{
+use tacita::{
     editing::{TextEditOptions, TextEditor, TextEventKind, MAX_EDIT_BYTES},
     font::{CaretPosition, FontId, ShapedOptions, ShapedText, TextDirection},
     id::Id,
@@ -20,7 +20,7 @@ pub unsafe extern "C" fn gui_set_color_font_texture(ctx: *mut GuiContext, textur
             let texture = if texture == 0 {
                 None
             } else {
-                Some(restricted_gui::draw::TextureId(texture))
+                Some(tacita::draw::TextureId(texture))
             };
             if gui.ctx.set_color_atlas_texture(texture).is_err() {
                 invalid();

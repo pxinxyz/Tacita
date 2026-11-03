@@ -1,6 +1,6 @@
 use chrono::Local;
-use restricted_gui::draw::DrawVert;
-use restricted_gui::style::Style;
+use tacita::draw::DrawVert;
+use tacita::style::Style;
 use std::fmt::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use winit::window::ResizeDirection;
@@ -97,7 +97,7 @@ impl ChromeMesh {
         let detail_scale = if compact { 1.25 } else { 1.5 };
         self.text(
             [20.0, (BAR_HEIGHT - 7.0 * detail_scale) * 0.5],
-            "restricted gui / preview",
+            "Tacita / preview",
             detail_scale,
             ink,
         );
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn chrome_uses_the_selected_style_colors() {
         let mut mesh = ChromeMesh::new();
-        let style = restricted_gui::style::Style {
+        let style = tacita::style::Style {
             title_bg: [8, 9, 12, 255],
             title_text: [226, 229, 237, 255],
             widget_bg: [21, 24, 32, 255],
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn title_font_covers_every_displayed_character() {
-        for ch in "restricted gui / preview 00:00:00 : 00.00.0000".chars() {
+        for ch in "Tacita / preview 00:00:00 : 00.00.0000".chars() {
             assert!(glyph(ch).is_some(), "missing title glyph: {ch}");
         }
     }

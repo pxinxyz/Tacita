@@ -1,5 +1,5 @@
 use crate::{gui_export, slice_arg, translate_key_event, GuiContext, GuiErrorCode, GuiInput};
-use restricted_gui::{
+use tacita::{
     diagnostics::{InputRecording, InspectionNode, ReplayCursor},
     display::DisplayMetrics,
     input::InputState,
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn gui_recording_load(
 ) -> bool {
     gui_export!(
         || {
-            if handle.is_null() || len > restricted_gui::diagnostics::MAX_RECORDING_BYTES {
+            if handle.is_null() || len > tacita::diagnostics::MAX_RECORDING_BYTES {
                 invalid();
                 return false;
             }

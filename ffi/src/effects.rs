@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, ContainerKind, ContainerScope, GuiColor, GuiContext,
     GuiErrorCode, GuiGradientStop, GuiRect, GuiRoundedRect, GuiVec2, WindowState,
 };
-use restricted_gui::{
+use tacita::{
     effects::{
         AlphaMask, GradientKind, GradientMask, GradientPaint, GradientSpread, GradientStop,
         RevealDirection, RevealMask, SdfKind, SdfStyle,
@@ -20,7 +20,7 @@ pub struct GuiDrawEffects {
     pub stencil: [u32; 2],
 }
 impl GuiDrawEffects {
-    fn uniform_bytes(self) -> Option<[u8; restricted_gui::effects::EFFECT_UNIFORM_SIZE]> {
+    fn uniform_bytes(self) -> Option<[u8; tacita::effects::EFFECT_UNIFORM_SIZE]> {
         if self.gradient.kind > 3
             || self.gradient.spread > 2
             || self.gradient.stop_count > 16
@@ -35,12 +35,12 @@ impl GuiDrawEffects {
             return None;
         }
         let surface = if self.surface.flags == 0 {
-            restricted_gui::effects::SurfaceStyle::default()
+            tacita::effects::SurfaceStyle::default()
         } else {
             self.surface.decode()?
         };
         Some(
-            restricted_gui::effects::DrawEffects {
+            tacita::effects::DrawEffects {
                 gradient: self.gradient,
                 masks: self.masks,
                 sdf: self.sdf,
@@ -52,16 +52,16 @@ impl GuiDrawEffects {
         )
     }
 }
-pub type GuiGradientFill = restricted_gui::effects::GradientFill;
-pub type GuiMaskStack = restricted_gui::effects::MaskStack;
-pub type GuiMaskOp = restricted_gui::effects::MaskOp;
+pub type GuiGradientFill = tacita::effects::GradientFill;
+pub type GuiMaskStack = tacita::effects::MaskStack;
+pub type GuiMaskOp = tacita::effects::MaskOp;
 pub const GUI_PAINT_LINEAR: u32 = 1;
 pub const GUI_PAINT_RADIAL: u32 = 2;
 pub const GUI_PAINT_CONIC: u32 = 3;
 pub const GUI_MAX_PAINT_STOPS: u32 = 16;
 pub const GUI_MAX_MASKS: u32 = 4;
-pub const GUI_EFFECT_UNIFORM_SIZE: u32 = restricted_gui::effects::EFFECT_UNIFORM_SIZE as u32;
-pub type GuiSdfShape = restricted_gui::effects::SdfShape;
+pub const GUI_EFFECT_UNIFORM_SIZE: u32 = tacita::effects::EFFECT_UNIFORM_SIZE as u32;
+pub type GuiSdfShape = tacita::effects::SdfShape;
 pub const GUI_SDF_FILL: u32 = 1;
 pub const GUI_SDF_BORDER: u32 = 2;
 pub const GUI_SDF_GLOW: u32 = 3;
@@ -385,7 +385,7 @@ pub unsafe extern "C" fn gui_begin_alpha_mask(ctx: *mut GuiContext, mask: GuiAlp
                 return false;
             };
             match gui.ctx.ui().begin_alpha_mask(AlphaMask {
-                texture: restricted_gui::draw::TextureId(mask.texture),
+                texture: tacita::draw::TextureId(mask.texture),
                 rect: mask.rect.into(),
                 uv: mask.uv,
             }) {
@@ -828,8 +828,8 @@ pub struct GuiSurfaceStyle {
     pub refraction: f32,
     pub rect: [f32; 4],
 }
-impl From<restricted_gui::effects::SurfaceStyle> for GuiSurfaceStyle {
-    fn from(v: restricted_gui::effects::SurfaceStyle) -> Self {
+impl From<tacita::effects::SurfaceStyle> for GuiSurfaceStyle {
+    fn from(v: tacita::effects::SurfaceStyle) -> Self {
         Self {
             flags: v.flags,
             phase: v.phase,
@@ -860,13 +860,13 @@ impl From<restricted_gui::effects::SurfaceStyle> for GuiSurfaceStyle {
     }
 }
 impl GuiSurfaceStyle {
-    fn decode(self) -> Option<restricted_gui::effects::SurfaceStyle> {
+    fn decode(self) -> Option<tacita::effects::SurfaceStyle> {
         let dither_kind = match self.dither_kind {
-            0 => restricted_gui::effects::DitherKind::Bayer,
-            1 => restricted_gui::effects::DitherKind::BlueNoise,
+            0 => tacita::effects::DitherKind::Bayer,
+            1 => tacita::effects::DitherKind::BlueNoise,
             _ => return None,
         };
-        let v = restricted_gui::effects::SurfaceStyle {
+        let v = tacita::effects::SurfaceStyle {
             flags: self.flags,
             phase: self.phase,
             pixel_scale: self.pixel_scale,
@@ -909,8 +909,8 @@ pub struct GuiImageFilter {
     pub secondary: u64,
     pub params: [f32; 6],
 }
-impl From<restricted_gui::effects::ImageFilter> for GuiImageFilter {
-    fn from(v: restricted_gui::effects::ImageFilter) -> Self {
+impl From<tacita::effects::ImageFilter> for GuiImageFilter {
+    fn from(v: tacita::effects::ImageFilter) -> Self {
         Self {
             kind: v.kind as u32,
             overwrite: v.overwrite,
@@ -925,8 +925,8 @@ impl From<restricted_gui::effects::ImageFilter> for GuiImageFilter {
     }
 }
 impl GuiImageFilter {
-    fn decode(self) -> Option<restricted_gui::effects::ImageFilter> {
-        use restricted_gui::effects::FilterKind;
+    fn decode(self) -> Option<tacita::effects::ImageFilter> {
+        use tacita::effects::FilterKind;
         let kind = match self.kind {
             0 => FilterKind::Copy,
             1 => FilterKind::GaussianX,
@@ -937,7 +937,7 @@ impl GuiImageFilter {
             6 => FilterKind::BloomCompose,
             _ => return None,
         };
-        let v = restricted_gui::effects::ImageFilter {
+        let v = tacita::effects::ImageFilter {
             kind,
             overwrite: self.overwrite,
             radius: self.radius,
@@ -970,8 +970,8 @@ pub struct GuiFilterStep {
 #[no_mangle]
 pub unsafe extern "C" fn gui_surface_default() -> GuiSurfaceStyle {
     gui_export!(
-        || restricted_gui::effects::SurfaceStyle::default().into(),
-        restricted_gui::effects::SurfaceStyle::default().into()
+        || tacita::effects::SurfaceStyle::default().into(),
+        tacita::effects::SurfaceStyle::default().into()
     )
 }
 #[no_mangle]
@@ -997,7 +997,7 @@ pub unsafe extern "C" fn gui_draw_surface(
                 crate::set_last_error(GuiErrorCode::InvalidInput);
                 return;
             }
-            let texture = (textured != 0).then_some(restricted_gui::draw::TextureId(texture));
+            let texture = (textured != 0).then_some(tacita::draw::TextureId(texture));
             if gui
                 .ctx
                 .ui()
@@ -1032,7 +1032,7 @@ pub unsafe extern "C" fn gui_draw_filtered_image(
                 .ctx
                 .ui()
                 .draw_filtered_image(
-                    restricted_gui::draw::TextureId(texture),
+                    tacita::draw::TextureId(texture),
                     rect.into(),
                     uv.into(),
                     color.into(),
@@ -1108,7 +1108,7 @@ pub unsafe extern "C" fn gui_filter_plan(
 ) -> usize {
     gui_export!(
         || {
-            use restricted_gui::effects::{Blur, BlurMethod, FilterPlan};
+            use tacita::effects::{Blur, BlurMethod, FilterPlan};
             let method = match blur.method {
                 0 => BlurMethod::Separable,
                 1 => BlurMethod::DualKawase,

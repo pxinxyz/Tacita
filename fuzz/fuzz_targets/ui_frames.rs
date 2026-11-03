@@ -1,9 +1,9 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use restricted_gui::context::Context;
-use restricted_gui::input::{InputState, Key, KeyEvent};
-use restricted_gui::ScrollFlags;
+use tacita::context::Context;
+use tacita::input::{InputState, Key, KeyEvent};
+use tacita::ScrollFlags;
 
 const FONT: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");
 const ITEMS: [&str; 12] = [

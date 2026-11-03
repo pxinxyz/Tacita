@@ -1,4 +1,4 @@
-use restricted_gui_sdk::{
+use tacita_sdk::{
     AccessibilityAction, AccessibilityActionKind, AccessibilityRole, AccessibilityState,
     CursorShape, Gui, HitTargetPolicy, ScrollFlags,
 };

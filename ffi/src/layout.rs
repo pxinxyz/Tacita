@@ -2,8 +2,8 @@ use crate::{
     active_frame_ctx, gui_export, slice_arg, str_arg, ContainerKind, ContainerScope, GuiContext,
     GuiErrorCode, GuiRect, GuiVec2, WindowState,
 };
-use restricted_gui::layout::{resolve_layout_extended_with, ContentAlign, GridCell, LayoutOptions};
-use restricted_gui::layout::{
+use tacita::layout::{resolve_layout_extended_with, ContentAlign, GridCell, LayoutOptions};
+use tacita::layout::{
     resolve_layout_with, LayoutAlign, LayoutItem, LayoutJustify, LayoutKind, LayoutSpec,
     MAX_LAYOUT_ITEMS,
 };

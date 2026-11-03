@@ -1531,74 +1531,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
-name = "restricted-gui"
-version = "0.1.0"
-dependencies = [
- "fontdue",
- "rustybuzz",
- "unicode-bidi",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "restricted-gui-d3d11"
-version = "0.1.0"
-dependencies = [
- "png",
- "restricted-gui",
- "restricted-gui-win32",
- "windows",
-]
-
-[[package]]
-name = "restricted-gui-d3d12"
-version = "0.1.0"
-dependencies = [
- "restricted-gui",
- "restricted-gui-win32",
- "windows",
-]
-
-[[package]]
-name = "restricted-gui-demo"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "pollster",
- "restricted-gui",
- "wgpu",
- "winit",
-]
-
-[[package]]
-name = "restricted-gui-ffi"
-version = "0.1.0"
-dependencies = [
- "restricted-gui",
-]
-
-[[package]]
-name = "restricted-gui-host"
-version = "0.1.0"
-dependencies = [
- "restricted-gui",
-]
-
-[[package]]
-name = "restricted-gui-sdk"
-version = "0.1.0"
-dependencies = [
- "restricted-gui",
-]
-
-[[package]]
-name = "restricted-gui-win32"
-version = "0.1.0"
-dependencies = [
- "restricted-gui",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1857,6 +1789,74 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tacita"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "rustybuzz",
+ "unicode-bidi",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "tacita-d3d11"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "tacita",
+ "tacita-win32",
+ "windows",
+]
+
+[[package]]
+name = "tacita-d3d12"
+version = "0.1.0"
+dependencies = [
+ "tacita",
+ "tacita-win32",
+ "windows",
+]
+
+[[package]]
+name = "tacita-demo"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pollster",
+ "tacita",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "tacita-ffi"
+version = "0.1.0"
+dependencies = [
+ "tacita",
+]
+
+[[package]]
+name = "tacita-host"
+version = "0.1.0"
+dependencies = [
+ "tacita",
+]
+
+[[package]]
+name = "tacita-sdk"
+version = "0.1.0"
+dependencies = [
+ "tacita",
+]
+
+[[package]]
+name = "tacita-win32"
+version = "0.1.0"
+dependencies = [
+ "tacita",
 ]
 
 [[package]]

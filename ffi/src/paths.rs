@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, slice_arg, GuiColor, GuiContext, GuiErrorCode, GuiVec2,
     WindowState,
 };
-use restricted_gui::paths::{
+use tacita::paths::{
     DashPattern, LineCap, LineJoin, StrokeStyle, MAX_DASH_LENGTHS, MAX_PATH_POINTS,
     MAX_POLYGON_POINTS,
 };
@@ -67,7 +67,7 @@ unsafe fn points<'a>(ptr: *const GuiVec2, count: usize, limit: usize) -> Option<
     }
     result
 }
-fn result(value: Result<(), restricted_gui::paths::PathError>) -> bool {
+fn result(value: Result<(), tacita::paths::PathError>) -> bool {
     if value.is_err() {
         crate::set_last_error(GuiErrorCode::InvalidInput);
         false
@@ -322,10 +322,10 @@ mod tests {
             assert!(gui_draw_polyline(ctx, points.as_ptr(), 3, 0, style, color));
             crate::gui_end_window(ctx);
             let actual = crate::gui_render(ctx);
-            let mut core = restricted_gui::context::Context::new(font).unwrap();
+            let mut core = tacita::context::Context::new(font).unwrap();
             core.new_frame(0.016);
             core.ui()
-                .window("paths", restricted_gui::ScrollFlags::NONE, |ui| {
+                .window("paths", tacita::ScrollFlags::NONE, |ui| {
                     ui.draw_polyline(
                         &[[100., 100.], [180., 100.], [180., 180.]],
                         false,

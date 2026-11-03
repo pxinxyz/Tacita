@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, slice_arg, str_arg, ContainerKind, ContainerScope, GuiContext,
     GuiErrorCode, GuiStr, GuiVec2, WindowState,
 };
-use restricted_gui::data::{
+use tacita::data::{
     DataTableOptions, DataTableState, NumericEdit, Selection, SortSpec, VisibleRows,
     MAX_DATA_COLUMNS, MAX_DATA_ROWS,
 };

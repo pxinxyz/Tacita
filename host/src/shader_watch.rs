@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn content_revision_and_failed_bundle_are_atomic() {
         let root =
-            std::env::temp_dir().join(format!("restricted-shader-watch-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tacita-shader-watch-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let a = root.join("a.wgsl");
         let b = root.join("b.wgsl");

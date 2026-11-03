@@ -6,7 +6,7 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_D24_UNORM_S8_UINT;
 
-use restricted_gui::draw::{DrawData, DrawVert, TextureId};
+use tacita::draw::{DrawData, DrawVert, TextureId};
 use windows::core::PCSTR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -38,7 +38,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 
 use crate::shader;
-use restricted_gui::rendering::{
+use tacita::rendering::{
     AlphaMode, CommandPlan, DrawCalls, DrawOptimization, GeometryRange,
 };
 #[path = "rendering_options.rs"]
@@ -729,7 +729,7 @@ impl Pipeline {
         let ib_offset = align_up(vb_offset + vertex_bytes.len() as u64, RING_ALIGNMENT);
         let quad_offset = align_up(ib_offset + index_bytes.len() as u64, RING_ALIGNMENT);
         let effects_offset = align_up(quad_offset + quad_bytes.len() as u64, RING_ALIGNMENT);
-        let effect_stride = restricted_gui::effects::EFFECT_UNIFORM_SIZE as u64;
+        let effect_stride = tacita::effects::EFFECT_UNIFORM_SIZE as u64;
         let required =
             effects_offset + (draw_data.effects.len() as u64 + 1) * effect_stride * alpha_banks;
         let desired = required.max(self.minimum_ring).next_power_of_two();
@@ -810,7 +810,7 @@ impl Pipeline {
                 quad_bytes.len(),
             );
             for flags in 0..alpha_banks {
-                for (i, effect) in core::iter::once(restricted_gui::effects::DrawEffects::default())
+                for (i, effect) in core::iter::once(tacita::effects::DrawEffects::default())
                     .chain(draw_data.effects.iter().copied())
                     .enumerate()
                 {
@@ -900,14 +900,14 @@ impl Pipeline {
                 };
                 let Some(srv) = self.textures.srv_for(cmd.texture) else {
                     eprintln!(
-                        "restricted-gui-d3d12: skipping draw command: texture id {} is not \
+                        "tacita-d3d12: skipping draw command: texture id {} is not \
                          registered (backend contract §7)",
                         cmd.texture.0
                     );
                     continue;
                 };
                 let effect = if cmd.effects == 0 {
-                    restricted_gui::effects::DrawEffects::default()
+                    tacita::effects::DrawEffects::default()
                 } else if let Some(effect) = draw_data.effects.get(cmd.effects as usize - 1) {
                     *effect
                 } else {
@@ -964,7 +964,7 @@ impl Pipeline {
                     2,
                     slot.ring.gpu_base
                         + effects_offset
-                        + (restricted_gui::rendering::alpha_flags(
+                        + (tacita::rendering::alpha_flags(
                             rendering_options::texture_alpha(&self.texture_alpha, cmd.texture),
                             self.alpha_mode,
                             rendering_options::texture_alpha(

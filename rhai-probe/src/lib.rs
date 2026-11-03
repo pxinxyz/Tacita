@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, rc::Rc};
 use core::cell::{RefCell, RefMut};
-use restricted_gui_sdk::{Gui, ScrollFlags};
+use tacita_sdk::{Gui, ScrollFlags};
 use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, Map, ParseError, Scope, AST};
 
 #[derive(Clone)]

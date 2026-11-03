@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, str_arg, GuiColor, GuiContext, GuiErrorCode, GuiRect, GuiVec2,
     WindowState,
 };
-use restricted_gui::svg::SvgIconId;
+use tacita::svg::SvgIconId;
 pub const GUI_SVG_ICON_INVALID: u32 = u32::MAX;
 
 #[no_mangle]

@@ -265,7 +265,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "restricted-gui"
+name = "tacita"
 version = "0.1.0"
 dependencies = [
  "fontdue",
@@ -275,18 +275,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "restricted-gui-rhai-probe"
+name = "tacita-rhai-probe"
 version = "0.0.0"
 dependencies = [
- "restricted-gui-sdk",
+ "tacita-sdk",
  "rhai",
 ]
 
 [[package]]
-name = "restricted-gui-sdk"
+name = "tacita-sdk"
 version = "0.1.0"
 dependencies = [
- "restricted-gui",
+ "tacita",
 ]
 
 [[package]]

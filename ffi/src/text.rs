@@ -2,8 +2,8 @@ use crate::{
     active_frame_ctx, gui_export, slice_arg, str_arg, GuiColor, GuiContext, GuiErrorCode, GuiRect,
     GuiStr, GuiVec2, WindowState,
 };
-use restricted_gui::font::FontId;
-use restricted_gui::text::{TextAlign, TextMetrics, TextOptions, TextOverflow, TextSpan};
+use tacita::font::FontId;
+use tacita::text::{TextAlign, TextMetrics, TextOptions, TextOverflow, TextSpan};
 
 pub const GUI_TEXT_ALIGN_START: u32 = 0;
 pub const GUI_TEXT_ALIGN_CENTER: u32 = 1;
@@ -254,7 +254,7 @@ pub unsafe extern "C" fn gui_draw_text_box(
             else {
                 return error();
             };
-            if !restricted_gui::animation::layout::valid_rect(rect.into()) {
+            if !tacita::animation::layout::valid_rect(rect.into()) {
                 return error();
             }
             gui.ctx
@@ -286,7 +286,7 @@ pub unsafe extern "C" fn gui_draw_rich_text_box(
             else {
                 return error();
             };
-            if !restricted_gui::animation::layout::valid_rect(rect.into()) {
+            if !tacita::animation::layout::valid_rect(rect.into()) {
                 return error();
             }
             gui.ctx

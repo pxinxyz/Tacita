@@ -1,9 +1,9 @@
-use restricted_gui::context::Context as GuiContext;
-use restricted_gui::draw::{DrawCmd, DrawData, DrawVert, TextureId};
-use restricted_gui::input::InputState;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
-use restricted_gui_d3d12::{D3d12Backend, OffscreenTarget, Queue};
+use tacita::context::Context as GuiContext;
+use tacita::draw::{DrawCmd, DrawData, DrawVert, TextureId};
+use tacita::input::InputState;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
+use tacita_d3d12::{D3d12Backend, OffscreenTarget, Queue};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
 

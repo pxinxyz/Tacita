@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, str_arg, ContainerKind, ContainerScope, GuiColor, GuiContext,
     GuiErrorCode, GuiRect, GuiVec2, WindowState,
 };
-use restricted_gui::shapes::{BorderPlacement, RoundedRect, Shadow};
+use tacita::shapes::{BorderPlacement, RoundedRect, Shadow};
 
 pub const GUI_BORDER_INNER: u32 = 0;
 pub const GUI_BORDER_CENTER: u32 = 1;

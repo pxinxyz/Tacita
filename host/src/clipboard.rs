@@ -1,6 +1,6 @@
 #[cfg(any(windows, test))]
-use restricted_gui::editing::MAX_EDIT_BYTES;
-use restricted_gui::{context::Context, editing::ClipboardAction};
+use tacita::editing::MAX_EDIT_BYTES;
+use tacita::{context::Context, editing::ClipboardAction};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardError {
     Unavailable,

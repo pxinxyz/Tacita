@@ -1,10 +1,10 @@
-use restricted_gui::animation::{
+use tacita::animation::{
     Easing, GradientOptions, GradientStop, Keyframe, MotionSettings, TimelineOptions,
 };
-use restricted_gui::context::Context;
-use restricted_gui::id::Id;
-use restricted_gui::input::InputState;
-use restricted_gui::ScrollFlags;
+use tacita::context::Context;
+use tacita::id::Id;
+use tacita::input::InputState;
+use tacita::ScrollFlags;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -53,22 +53,22 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
         ctx.new_frame(1.0 / 144.0);
         ctx.ui().window("motion", ScrollFlags::NONE, |ui| {
             let spans = [
-                restricted_gui::text::TextSpan {
+                tacita::text::TextSpan {
                     text: "Wrapping across ",
-                    font: restricted_gui::font::FontId::DEFAULT,
+                    font: tacita::font::FontId::DEFAULT,
                     color: [255; 4],
                 },
-                restricted_gui::text::TextSpan {
+                tacita::text::TextSpan {
                     text: "colored spans, café λ and an oversizedword.\nNext line.",
-                    font: restricted_gui::font::FontId::DEFAULT,
+                    font: tacita::font::FontId::DEFAULT,
                     color: [100, 150, 200, 255],
                 },
             ];
-            let options = restricted_gui::text::TextOptions {
+            let options = tacita::text::TextOptions {
                 wrap: true,
-                overflow: restricted_gui::text::TextOverflow::Ellipsis,
+                overflow: tacita::text::TextOverflow::Ellipsis,
                 max_lines: 3,
-                ..restricted_gui::text::TextOptions::default()
+                ..tacita::text::TextOptions::default()
             };
             ui.draw_rich_text_box([320.0, 90.0, 460.0, 180.0], &spans, options);
             ui.measure_rich_text(&spans, 140.0, options);
@@ -82,21 +82,21 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
                     color: [0, 229, 255, 255],
                 },
             ];
-            let paint_shape = restricted_gui::shapes::RoundedRect::new(
+            let paint_shape = tacita::shapes::RoundedRect::new(
                 [320.0, 300.0, 460.0, 370.0],
                 [12.0, 0.0, 24.0, 8.0],
             )
             .unwrap();
             ui.gradient_mask(
-                restricted_gui::effects::GradientMask {
+                tacita::effects::GradientMask {
                     start: [320.0, 300.0],
                     end: [460.0, 300.0],
                     opacity: [1.0, frame as f32 / 96.0],
                 },
                 |ui| {
                     ui.alpha_mask(
-                        restricted_gui::effects::AlphaMask {
-                            texture: restricted_gui::draw::TextureId(42),
+                        tacita::effects::AlphaMask {
+                            texture: tacita::draw::TextureId(42),
                             rect: paint_shape.rect,
                             uv: [0.0, 0.0, 1.0, 1.0],
                         },
@@ -104,8 +104,8 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
                             ui.draw_shape_gradient(
                                 paint_shape,
                                 &paint_stops,
-                                restricted_gui::effects::GradientPaint {
-                                    kind: restricted_gui::effects::GradientKind::Conic,
+                                tacita::effects::GradientPaint {
+                                    kind: tacita::effects::GradientKind::Conic,
                                     origin: [0.5; 2],
                                     phase: frame as f32 / 96.0,
                                     ..Default::default()
@@ -119,9 +119,9 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
             )
             .unwrap();
             ui.reveal_mask(
-                restricted_gui::effects::RevealMask {
+                tacita::effects::RevealMask {
                     rect: paint_shape.rect,
-                    direction: restricted_gui::effects::RevealDirection::Radial,
+                    direction: tacita::effects::RevealDirection::Radial,
                     progress: frame as f32 / 96.0,
                     softness: 0.15,
                     inverted: frame % 2 == 0,
@@ -130,12 +130,12 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
                     ui.draw_sdf_shape_gradient(
                         paint_shape,
                         &paint_stops,
-                        restricted_gui::effects::GradientPaint {
+                        tacita::effects::GradientPaint {
                             phase: frame as f32 / 96.0,
                             ..Default::default()
                         },
-                        restricted_gui::effects::SdfStyle {
-                            kind: restricted_gui::effects::SdfKind::Border,
+                        tacita::effects::SdfStyle {
+                            kind: tacita::effects::SdfKind::Border,
                             width: 1.0 + frame as f32 / 96.0,
                             ..Default::default()
                         },
@@ -144,8 +144,8 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
                     ui.draw_sdf_shape(
                         paint_shape,
                         [255; 4],
-                        restricted_gui::effects::SdfStyle {
-                            kind: restricted_gui::effects::SdfKind::EdgeGlow,
+                        tacita::effects::SdfStyle {
+                            kind: tacita::effects::SdfKind::EdgeGlow,
                             reach: 8.0 + frame as f32 / 96.0,
                             ..Default::default()
                         },
@@ -155,7 +155,7 @@ fn trajectory(ctx: &mut Context) -> (usize, usize) {
             )
             .unwrap();
             ui.draw_svg_icon(
-                restricted_gui::svg::SvgIconId(0),
+                tacita::svg::SvgIconId(0),
                 [330.0, 60.0, 346.0, 76.0],
                 [255; 4],
             )
@@ -289,7 +289,7 @@ fn repeated_motion_trajectories_allocate_zero_after_warmup() {
 }
 
 fn check_shape_allocations() {
-    use restricted_gui::shapes::{BorderPlacement, RoundedRect, Shadow};
+    use tacita::shapes::{BorderPlacement, RoundedRect, Shadow};
     let mut ctx = Context::new(include_bytes!("assets/DejaVuSans.ttf")).unwrap();
     let run = |ctx: &mut Context| {
         for frame in 0..8 {
@@ -336,7 +336,7 @@ fn check_shape_allocations() {
 }
 
 fn check_subpixel_text_allocations() {
-    use restricted_gui::font::{Font, FontId, IconFont, TextRasterMode};
+    use tacita::font::{Font, FontId, IconFont, TextRasterMode};
     let font = Font::new_with_icons_at_scale(
         include_bytes!("assets/DejaVuSans.ttf"),
         16.0,
@@ -378,7 +378,7 @@ fn check_subpixel_text_allocations() {
 }
 
 fn check_nested_layout_and_layer_allocations() {
-    use restricted_gui::layout::{LayoutItem, LayoutSpec};
+    use tacita::layout::{LayoutItem, LayoutSpec};
     let mut ctx = Context::new(include_bytes!("assets/DejaVuSans.ttf")).unwrap();
     let run = |ctx: &mut Context| {
         for frame in 0..12 {

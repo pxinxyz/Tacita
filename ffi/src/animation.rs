@@ -1,10 +1,10 @@
 use crate::{active_frame_ctx, gui_export, GuiColor, GuiContext, GuiErrorCode};
 use crate::{slice_arg, str_arg, ContainerKind, ContainerScope, GuiRect, GuiVec2, WindowState};
-use restricted_gui::animation::{Easing, MotionSettings};
-use restricted_gui::animation::{
+use tacita::animation::{Easing, MotionSettings};
+use tacita::animation::{
     GradientOptions, GradientSpread, GradientStop, Keyframe, PlaybackMode, TimelineOptions,
 };
-use restricted_gui::id::Id;
+use tacita::id::Id;
 
 const CURVES: [Easing; 7] = [
     Easing::Linear,
@@ -92,7 +92,7 @@ fn key(raw: GuiKeyframe) -> Keyframe {
 }
 fn valid_keys(keys: &[GuiKeyframe]) -> bool {
     keys.iter().all(|k| k.easing < CURVES.len() as u32)
-        && restricted_gui::animation::timeline::valid_keyframes_with(keys.len(), |i| key(keys[i]))
+        && tacita::animation::timeline::valid_keyframes_with(keys.len(), |i| key(keys[i]))
 }
 fn stop(raw: GuiGradientStop) -> GradientStop {
     GradientStop {
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn gui_sample_keyframes(
                 crate::set_last_error(GuiErrorCode::InvalidInput);
                 return 0.0;
             }
-            restricted_gui::animation::timeline::sample_keyframes_with(
+            tacita::animation::timeline::sample_keyframes_with(
                 keys.len(),
                 |i| key(keys[i]),
                 time,
@@ -190,8 +190,8 @@ pub unsafe extern "C" fn gui_animate_rect(
                 crate::set_last_error(GuiErrorCode::InvalidInput);
                 return [0.0; 4].into();
             };
-            if !restricted_gui::animation::layout::valid_rect(initial.into())
-                || !restricted_gui::animation::layout::valid_rect(target.into())
+            if !tacita::animation::layout::valid_rect(initial.into())
+                || !tacita::animation::layout::valid_rect(target.into())
                 || !duration.is_finite()
                 || duration < 0.0
             {
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn gui_begin_animated_layout(
                 return false;
             };
             if out_rect.is_null()
-                || !restricted_gui::animation::layout::valid_rect(target.into())
+                || !tacita::animation::layout::valid_rect(target.into())
                 || !duration.is_finite()
                 || duration < 0.0
             {
@@ -328,8 +328,8 @@ unsafe fn draw_gradient(
         crate::set_last_error(GuiErrorCode::InvalidInput);
         return;
     };
-    if !restricted_gui::animation::layout::valid_rect(rect.into())
-        || !restricted_gui::animation::gradient::valid_stops_with(stops.len(), |i| stop(stops[i]))
+    if !tacita::animation::layout::valid_rect(rect.into())
+        || !tacita::animation::gradient::valid_stops_with(stops.len(), |i| stop(stops[i]))
         || clock
             .is_some_and(|(time, period)| !time.is_finite() || !period.is_finite() || period <= 0.0)
     {
@@ -456,7 +456,7 @@ pub unsafe extern "C" fn gui_pulse(time: f32, period: f32) -> f32 {
                 crate::set_last_error(GuiErrorCode::InvalidInput);
                 return 1.0;
             }
-            restricted_gui::animation::pulse(time, period)
+            tacita::animation::pulse(time, period)
         },
         1.0
     )

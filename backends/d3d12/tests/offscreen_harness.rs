@@ -1,4 +1,4 @@
-use restricted_gui_d3d12::{D3d12Backend, FrameSync, OffscreenTarget};
+use tacita_d3d12::{D3d12Backend, FrameSync, OffscreenTarget};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 

@@ -1,16 +1,16 @@
-use restricted_gui::context::Context;
-use restricted_gui::draw::{DrawCmd, DrawVert};
-use restricted_gui::input::InputState;
-use restricted_gui::style::Style;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
-use restricted_gui_sdk::{icon, FontId, Gui, IconFont};
+use tacita::context::Context;
+use tacita::draw::{DrawCmd, DrawVert};
+use tacita::input::InputState;
+use tacita::style::Style;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
+use tacita_sdk::{icon, FontId, Gui, IconFont};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");
 
 #[test]
 fn connected_paths_and_extended_layout_forward_exactly_and_suppress() {
-    use restricted_gui_sdk::{
+    use tacita_sdk::{
         ContentAlign, DashPattern, GridCell, LayoutAlign, LayoutItem, LayoutKind, LayoutOptions,
         LayoutSpec, LineCap, LineJoin, StrokeStyle,
     };
@@ -164,7 +164,7 @@ fn connected_paths_and_extended_layout_forward_exactly_and_suppress() {
 
 #[test]
 fn paints_and_mask_scopes_match_core_including_effect_tables() {
-    use restricted_gui_sdk::{
+    use tacita_sdk::{
         AlphaMask, BorderPlacement, GradientKind, GradientMask, GradientPaint, GradientStop,
         RoundedRect,
     };
@@ -186,7 +186,7 @@ fn paints_and_mask_scopes_match_core_including_effect_tables() {
         ..Default::default()
     };
     let alpha = AlphaMask {
-        texture: restricted_gui::draw::TextureId(42),
+        texture: tacita::draw::TextureId(42),
         rect: shape.rect,
         uv: [0.0, 0.0, 1.0, 1.0],
     };
@@ -244,7 +244,7 @@ fn paints_and_mask_scopes_match_core_including_effect_tables() {
 
 #[test]
 fn shape_and_rounded_scope_forwards_match_and_suppress_closed_content() {
-    use restricted_gui_sdk::{BorderPlacement, RoundedRect, Shadow};
+    use tacita_sdk::{BorderPlacement, RoundedRect, Shadow};
     let shape = RoundedRect::new([90.0, 100.0, 250.0, 200.0], [24.0, 0.0, 12.0, 8.0]).unwrap();
     let shadow = Shadow {
         offset: [2.0, 3.0],
@@ -317,7 +317,7 @@ fn shape_and_rounded_scope_forwards_match_and_suppress_closed_content() {
 
 #[test]
 fn subpixel_mode_forwards_with_identical_text_draw_data() {
-    use restricted_gui_sdk::TextRasterMode;
+    use tacita_sdk::TextRasterMode;
     let mut ctx = Context::new(DEJAVU_SANS).unwrap();
     let mut gui = Gui::new(DEJAVU_SANS).unwrap();
     assert_eq!(gui.text_raster_mode(), TextRasterMode::Legacy);
@@ -339,7 +339,7 @@ fn subpixel_mode_forwards_with_identical_text_draw_data() {
 
 #[test]
 fn svg_and_nested_layered_layout_match_core_and_suppress_closed_scopes() {
-    use restricted_gui_sdk::{LayoutItem, LayoutKind, LayoutSpec, SvgIconId};
+    use tacita_sdk::{LayoutItem, LayoutKind, LayoutSpec, SvgIconId};
     let source = "<svg viewBox='0 0 16 16'><circle cx='8' cy='8' r='6'/></svg>";
     let mut core = Context::new(DEJAVU_SANS).unwrap();
     let mut gui = Gui::new(DEJAVU_SANS).unwrap();
@@ -435,7 +435,7 @@ fn svg_and_nested_layered_layout_match_core_and_suppress_closed_scopes() {
 
 #[test]
 fn rich_text_and_plain_blocks_match_core_and_suppress_closed_scopes() {
-    use restricted_gui_sdk::{FontId, TextAlign, TextOptions, TextOverflow, TextSpan};
+    use tacita_sdk::{FontId, TextAlign, TextOptions, TextOverflow, TextSpan};
     let mut core = Context::new(DEJAVU_SANS).unwrap();
     let mut gui = Gui::new(DEJAVU_SANS).unwrap();
     let opts = TextOptions {
@@ -490,7 +490,7 @@ fn rich_text_and_plain_blocks_match_core_and_suppress_closed_scopes() {
 
 #[test]
 fn timeline_gradient_layout_and_theme_forwards_match_core() {
-    use restricted_gui_sdk::{
+    use tacita_sdk::{
         Easing, GradientOptions, GradientStop, Keyframe, MotionSettings, ThemeTokens,
         TimelineOptions,
     };
@@ -533,7 +533,7 @@ fn timeline_gradient_layout_and_theme_forwards_match_core() {
         core.set_input(input(AWAY, false, 0.0));
         core.new_frame(0.02);
         let value =
-            core.animate_timeline(restricted_gui::id::Id(9), &keys, TimelineOptions::default());
+            core.animate_timeline(tacita::id::Id(9), &keys, TimelineOptions::default());
         core.ui().window("Motion", ScrollFlags::NONE, |ui| {
             ui.animated_layout("Region", rect, 0.2, Easing::Linear, |ui, bounds| {
                 ui.draw_animated_gradient(
@@ -554,7 +554,7 @@ fn timeline_gradient_layout_and_theme_forwards_match_core() {
         );
         gui.new_frame(input(AWAY, false, 0.0), 0.02);
         assert_eq!(
-            gui.animate_timeline(restricted_gui_sdk::Id(9), &keys, TimelineOptions::default()),
+            gui.animate_timeline(tacita_sdk::Id(9), &keys, TimelineOptions::default()),
             value
         );
         gui.begin_window("Motion", ScrollFlags::NONE);
@@ -591,7 +591,7 @@ fn timeline_gradient_layout_and_theme_forwards_match_core() {
 
 #[test]
 fn motion_channels_and_animated_containers_match_core() {
-    use restricted_gui_sdk::{Easing, Id, MotionSettings};
+    use tacita_sdk::{Easing, Id, MotionSettings};
     let settings = MotionSettings {
         enabled: true,
         ..MotionSettings::default()
@@ -713,7 +713,7 @@ type Frame = (
     Vec<DrawVert>,
     Vec<u32>,
     Vec<DrawCmd>,
-    Vec<restricted_gui::effects::DrawEffects>,
+    Vec<tacita::effects::DrawEffects>,
 );
 
 fn input(mouse: [f32; 2], down: bool, wheel: f32) -> InputState<'static> {
@@ -1723,7 +1723,7 @@ fn font_scope_inside_a_closed_header_is_suppressed_like_the_closure() {
 
 #[test]
 fn sdf_and_reveal_forwards_match_core_and_suppress_closed_content() {
-    use restricted_gui_sdk::{
+    use tacita_sdk::{
         GradientPaint, GradientStop, RevealDirection, RevealMask, RoundedRect, SdfKind, SdfStyle,
     };
     let shape = RoundedRect::new([100.0, 100.0, 240.0, 180.0], [16.0, 0.0, 8.0, 4.0]).unwrap();
@@ -1825,7 +1825,7 @@ fn sdf_and_reveal_forwards_match_core_and_suppress_closed_content() {
 
 #[test]
 fn surface_filter_stencil_forwards_match_core_and_suppress_closed_scopes() {
-    use restricted_gui_sdk::{ImageFilter, RoundedRect, SurfaceStyle, TextureId, SURFACE_GRID};
+    use tacita_sdk::{ImageFilter, RoundedRect, SurfaceStyle, TextureId, SURFACE_GRID};
     let shape = RoundedRect::new([100., 100., 240., 220.], [20.; 4]).unwrap();
     let style = SurfaceStyle {
         flags: SURFACE_GRID,
@@ -1894,7 +1894,7 @@ fn surface_filter_stencil_forwards_match_core_and_suppress_closed_scopes() {
 
 #[test]
 fn images_and_inspection_forward_identical_geometry() {
-    use restricted_gui_sdk::{ImageFit, ImageRegion, NineSlice, TextureId};
+    use tacita_sdk::{ImageFit, ImageRegion, NineSlice, TextureId};
     let image = ImageRegion {
         texture: TextureId(9),
         uv_min: [0.1; 2],
@@ -1940,7 +1940,7 @@ fn images_and_inspection_forward_identical_geometry() {
 
 #[test]
 fn shaped_editors_and_host_text_services_forward_and_suppress() {
-    use restricted_gui_sdk::{
+    use tacita_sdk::{
         ShapedOptions, ShapedText, TextEditOptions, TextEditor, TextEventKind,
     };
     let mut c = Context::new(DEJAVU_SANS).unwrap();
@@ -1970,7 +1970,7 @@ fn shaped_editors_and_host_text_services_forward_and_suppress() {
         g.end_window();
     });
     assert_eq!(actual, expected);
-    let mut id = restricted_gui_sdk::Id(0);
+    let mut id = tacita_sdk::Id(0);
     gui_frame(&mut g, AWAY, false, 0., |g| {
         g.begin_window("edit", ScrollFlags::NONE);
         id = g.widget_id("field");
@@ -2010,7 +2010,7 @@ fn shaped_editors_and_host_text_services_forward_and_suppress() {
 
 #[test]
 fn color_font_atlas_and_shaped_geometry_forward_without_tinting() {
-    use restricted_gui_sdk::{FontId, ShapedText, TextureId};
+    use tacita_sdk::{FontId, ShapedText, TextureId};
     let mut c = Context::new(DEJAVU_SANS).unwrap();
     let mut g = Gui::new(DEJAVU_SANS).unwrap();
     let bytes = include_bytes!("../../core/tests/assets/Noto-COLRv1.ttf");

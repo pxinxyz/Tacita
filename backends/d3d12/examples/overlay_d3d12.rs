@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::error::Error;
 use std::time::Instant;
 
-use restricted_gui::context::Context;
-use restricted_gui::input::KeyBinding;
-use restricted_gui::ScrollFlags;
-use restricted_gui_d3d12::{D3d12Backend, Device, FrameSync, FRAMES_IN_FLIGHT};
-use restricted_gui_win32::Win32InputAdapter;
+use tacita::context::Context;
+use tacita::input::KeyBinding;
+use tacita::ScrollFlags;
+use tacita_d3d12::{D3d12Backend, Device, FrameSync, FRAMES_IN_FLIGHT};
+use tacita_win32::Win32InputAdapter;
 
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -234,7 +234,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 fn declare_panel(ctx: &mut Context, state: &mut DemoState) {
     let mut ui = ctx.ui();
-    ui.window("restricted-gui — D3D12 overlay", ScrollFlags::BAR, |ui| {
+    ui.window("tacita — D3D12 overlay", ScrollFlags::BAR, |ui| {
         ui.tab_bar("tabs##overlay", |bar| {
             bar.tab("Widgets", |ui| {
                 ui.label(&state.fps_text);
@@ -293,7 +293,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }));
 
     let hinstance = HINSTANCE::from(unsafe { GetModuleHandleW(None) }?);
-    let class_name = w!("restricted-gui-d3d12-overlay");
+    let class_name = w!("tacita-d3d12-overlay");
     let class = WNDCLASSW {
         style: WNDCLASS_STYLES(0),
         lpfnWndProc: Some(wndproc),
@@ -309,7 +309,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         CreateWindowExW(
             Default::default(),
             class_name,
-            w!("restricted-gui — D3D12 overlay example"),
+            w!("tacita — D3D12 overlay example"),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     context::Context,
     layout::{GridCell, LayoutAlign, LayoutItem, LayoutKind, LayoutOptions, LayoutSpec},
     paths::{DashPattern, LineCap, LineJoin, StrokeStyle},

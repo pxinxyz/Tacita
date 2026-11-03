@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use restricted_gui::draw::TextureId;
+use tacita::draw::TextureId;
 use windows::Win32::Graphics::Direct3D12::{
     ID3D12CommandAllocator, ID3D12CommandList, ID3D12DescriptorHeap, ID3D12GraphicsCommandList,
     ID3D12Resource, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_CPU_DESCRIPTOR_HANDLE,

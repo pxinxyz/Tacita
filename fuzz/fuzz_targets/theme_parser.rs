@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use restricted_gui::persistence::{decode_theme, encode_theme};
+use tacita::persistence::{decode_theme, encode_theme};
 fuzz_target!(|data: &[u8]| {
     if data.len() > 16384 {
         return;

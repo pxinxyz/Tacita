@@ -1,5 +1,5 @@
 use crate::{gui_export, GuiColor, GuiContext, GuiErrorCode, GuiVec2};
-use restricted_gui::theme::{ThemeTokens, THEME_ROLES};
+use tacita::theme::{ThemeTokens, THEME_ROLES};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

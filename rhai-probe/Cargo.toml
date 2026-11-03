@@ -1,5 +1,5 @@
 [package]
-name = "restricted-gui-rhai-probe"
+name = "tacita-rhai-probe"
 version = "0.0.0"
 edition = "2021"
 publish = false
@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 rhai = { version = "=1.26.1", default-features = false, features = ["no_std", "f32_float", "no_module"] }
-restricted-gui-sdk = { path = "../sdk" }
+tacita-sdk = { path = "../sdk" }
 
 [profile.dev.package."*"]
 opt-level = 2

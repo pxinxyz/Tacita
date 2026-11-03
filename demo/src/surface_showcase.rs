@@ -1,5 +1,5 @@
 use crate::postprocess::{BLOOM, BLURRED, SCENE};
-use restricted_gui::{draw::TextureId, effects::*, shapes::RoundedRect, ui::Ui};
+use tacita::{draw::TextureId, effects::*, shapes::RoundedRect, ui::Ui};
 const OPTIONS: [(&str, u32); 14] = [
     ("Noise", SURFACE_NOISE),
     ("Film grain", SURFACE_GRAIN),
@@ -339,7 +339,7 @@ pub(super) fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restricted_gui::{context::Context, input::InputState, ScrollFlags};
+    use tacita::{context::Context, input::InputState, ScrollFlags};
 
     #[test]
     fn gallery_canvases_emit_valid_geometry_at_default_and_narrow_window_sizes() {

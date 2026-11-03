@@ -1,12 +1,12 @@
 [package]
-name = "restricted-gui-ffi"
+name = "tacita-ffi"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "extern \"C\" FFI wrapper over restricted-gui for C++ hosts: opaque context handle, plain-C structs, panic containment."
+description = "extern \"C\" FFI wrapper over tacita for C++ hosts: opaque context handle, plain-C structs, panic containment."
 
 [lib]
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-restricted-gui = { path = "../core" }
+tacita = { path = "../core" }

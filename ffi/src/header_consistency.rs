@@ -137,7 +137,7 @@ fn header_defines(header: &str) -> BTreeMap<String, u64> {
 #[test]
 fn header_declares_exactly_the_exported_functions() {
     let header = strip_comments(&read(
-        &PathBuf::from(manifest_dir()).join("restricted_gui.h"),
+        &PathBuf::from(manifest_dir()).join("tacita.h"),
     ));
     let mut declared = declared_functions(&header);
     let mut exported = exported_functions();
@@ -166,7 +166,7 @@ fn header_declares_exactly_the_exported_functions() {
 #[test]
 fn header_constants_match_the_implementation_values() {
     let header = strip_comments(&read(
-        &PathBuf::from(manifest_dir()).join("restricted_gui.h"),
+        &PathBuf::from(manifest_dir()).join("tacita.h"),
     ));
     let defines = header_defines(&header);
 
@@ -513,15 +513,15 @@ fn header_constants_match_the_implementation_values() {
     expected.insert("GUI_VALIDATION_ERROR".into(), 2);
     expected.insert(
         "GUI_DOCK_LEFT".into(),
-        restricted_gui::panels::DockZone::Left as u64,
+        tacita::panels::DockZone::Left as u64,
     );
     expected.insert(
         "GUI_DOCK_RIGHT".into(),
-        restricted_gui::panels::DockZone::Right as u64,
+        tacita::panels::DockZone::Right as u64,
     );
     expected.insert(
         "GUI_DOCK_FLOATING".into(),
-        restricted_gui::panels::DockZone::Floating as u64,
+        tacita::panels::DockZone::Floating as u64,
     );
     expected.insert("GUI_SPLIT_HORIZONTAL".into(), 0);
     expected.insert("GUI_SPLIT_VERTICAL".into(), 1);
@@ -565,7 +565,7 @@ fn header_constants_match_the_implementation_values() {
         "DANGER",
     ]
     .iter()
-    .zip(restricted_gui::theme::THEME_ROLES)
+    .zip(tacita::theme::THEME_ROLES)
     {
         expected.insert(format!("GUI_THEME_{name}"), role as u64);
     }
@@ -921,109 +921,109 @@ fn struct_layouts_match_the_header_static_asserts() {
             align_of::<crate::GuiSurfaceStyle>()
         ),
         (
-            size_of::<restricted_gui::effects::SurfaceStyle>(),
-            align_of::<restricted_gui::effects::SurfaceStyle>()
+            size_of::<tacita::effects::SurfaceStyle>(),
+            align_of::<tacita::effects::SurfaceStyle>()
         )
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, flags),
-        offset_of!(restricted_gui::effects::SurfaceStyle, flags)
+        offset_of!(tacita::effects::SurfaceStyle, flags)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, phase),
-        offset_of!(restricted_gui::effects::SurfaceStyle, phase)
+        offset_of!(tacita::effects::SurfaceStyle, phase)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, pixel_scale),
-        offset_of!(restricted_gui::effects::SurfaceStyle, pixel_scale)
+        offset_of!(tacita::effects::SurfaceStyle, pixel_scale)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, noise),
-        offset_of!(restricted_gui::effects::SurfaceStyle, noise)
+        offset_of!(tacita::effects::SurfaceStyle, noise)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, grain),
-        offset_of!(restricted_gui::effects::SurfaceStyle, grain)
+        offset_of!(tacita::effects::SurfaceStyle, grain)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, dither),
-        offset_of!(restricted_gui::effects::SurfaceStyle, dither)
+        offset_of!(tacita::effects::SurfaceStyle, dither)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, dither_kind),
-        offset_of!(restricted_gui::effects::SurfaceStyle, dither_kind)
+        offset_of!(tacita::effects::SurfaceStyle, dither_kind)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, exposure),
-        offset_of!(restricted_gui::effects::SurfaceStyle, exposure)
+        offset_of!(tacita::effects::SurfaceStyle, exposure)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, contrast),
-        offset_of!(restricted_gui::effects::SurfaceStyle, contrast)
+        offset_of!(tacita::effects::SurfaceStyle, contrast)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, saturation),
-        offset_of!(restricted_gui::effects::SurfaceStyle, saturation)
+        offset_of!(tacita::effects::SurfaceStyle, saturation)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, desaturation),
-        offset_of!(restricted_gui::effects::SurfaceStyle, desaturation)
+        offset_of!(tacita::effects::SurfaceStyle, desaturation)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, tint),
-        offset_of!(restricted_gui::effects::SurfaceStyle, tint)
+        offset_of!(tacita::effects::SurfaceStyle, tint)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, scanlines),
-        offset_of!(restricted_gui::effects::SurfaceStyle, scanlines)
+        offset_of!(tacita::effects::SurfaceStyle, scanlines)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, spacing),
-        offset_of!(restricted_gui::effects::SurfaceStyle, spacing)
+        offset_of!(tacita::effects::SurfaceStyle, spacing)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, grid_width),
-        offset_of!(restricted_gui::effects::SurfaceStyle, grid_width)
+        offset_of!(tacita::effects::SurfaceStyle, grid_width)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, dot_radius),
-        offset_of!(restricted_gui::effects::SurfaceStyle, dot_radius)
+        offset_of!(tacita::effects::SurfaceStyle, dot_radius)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, vignette),
-        offset_of!(restricted_gui::effects::SurfaceStyle, vignette)
+        offset_of!(tacita::effects::SurfaceStyle, vignette)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, shimmer),
-        offset_of!(restricted_gui::effects::SurfaceStyle, shimmer)
+        offset_of!(tacita::effects::SurfaceStyle, shimmer)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, sweep_width),
-        offset_of!(restricted_gui::effects::SurfaceStyle, sweep_width)
+        offset_of!(tacita::effects::SurfaceStyle, sweep_width)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, sweep_speed),
-        offset_of!(restricted_gui::effects::SurfaceStyle, sweep_speed)
+        offset_of!(tacita::effects::SurfaceStyle, sweep_speed)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, distortion),
-        offset_of!(restricted_gui::effects::SurfaceStyle, distortion)
+        offset_of!(tacita::effects::SurfaceStyle, distortion)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, frequency),
-        offset_of!(restricted_gui::effects::SurfaceStyle, frequency)
+        offset_of!(tacita::effects::SurfaceStyle, frequency)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, chromatic),
-        offset_of!(restricted_gui::effects::SurfaceStyle, chromatic)
+        offset_of!(tacita::effects::SurfaceStyle, chromatic)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, refraction),
-        offset_of!(restricted_gui::effects::SurfaceStyle, refraction)
+        offset_of!(tacita::effects::SurfaceStyle, refraction)
     );
     assert_eq!(
         offset_of!(crate::GuiSurfaceStyle, rect),
-        offset_of!(restricted_gui::effects::SurfaceStyle, rect)
+        offset_of!(tacita::effects::SurfaceStyle, rect)
     );
     assert_eq!(
         (
@@ -1031,45 +1031,45 @@ fn struct_layouts_match_the_header_static_asserts() {
             align_of::<crate::GuiImageFilter>()
         ),
         (
-            size_of::<restricted_gui::effects::ImageFilter>(),
-            align_of::<restricted_gui::effects::ImageFilter>()
+            size_of::<tacita::effects::ImageFilter>(),
+            align_of::<tacita::effects::ImageFilter>()
         )
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, kind),
-        offset_of!(restricted_gui::effects::ImageFilter, kind)
+        offset_of!(tacita::effects::ImageFilter, kind)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, overwrite),
-        offset_of!(restricted_gui::effects::ImageFilter, overwrite)
+        offset_of!(tacita::effects::ImageFilter, overwrite)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, radius),
-        offset_of!(restricted_gui::effects::ImageFilter, radius)
+        offset_of!(tacita::effects::ImageFilter, radius)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, threshold),
-        offset_of!(restricted_gui::effects::ImageFilter, threshold)
+        offset_of!(tacita::effects::ImageFilter, threshold)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, intensity),
-        offset_of!(restricted_gui::effects::ImageFilter, intensity)
+        offset_of!(tacita::effects::ImageFilter, intensity)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, texel),
-        offset_of!(restricted_gui::effects::ImageFilter, texel)
+        offset_of!(tacita::effects::ImageFilter, texel)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, reserved),
-        offset_of!(restricted_gui::effects::ImageFilter, reserved)
+        offset_of!(tacita::effects::ImageFilter, reserved)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, secondary),
-        offset_of!(restricted_gui::effects::ImageFilter, secondary)
+        offset_of!(tacita::effects::ImageFilter, secondary)
     );
     assert_eq!(
         offset_of!(crate::GuiImageFilter, params),
-        offset_of!(restricted_gui::effects::ImageFilter, params)
+        offset_of!(tacita::effects::ImageFilter, params)
     );
     assert_eq!(
         (
@@ -1077,33 +1077,33 @@ fn struct_layouts_match_the_header_static_asserts() {
             align_of::<crate::GuiDrawEffects>()
         ),
         (
-            size_of::<restricted_gui::effects::DrawEffects>(),
-            align_of::<restricted_gui::effects::DrawEffects>()
+            size_of::<tacita::effects::DrawEffects>(),
+            align_of::<tacita::effects::DrawEffects>()
         )
     );
     assert_eq!(
         offset_of!(crate::GuiDrawEffects, gradient),
-        offset_of!(restricted_gui::effects::DrawEffects, gradient)
+        offset_of!(tacita::effects::DrawEffects, gradient)
     );
     assert_eq!(
         offset_of!(crate::GuiDrawEffects, masks),
-        offset_of!(restricted_gui::effects::DrawEffects, masks)
+        offset_of!(tacita::effects::DrawEffects, masks)
     );
     assert_eq!(
         offset_of!(crate::GuiDrawEffects, sdf),
-        offset_of!(restricted_gui::effects::DrawEffects, sdf)
+        offset_of!(tacita::effects::DrawEffects, sdf)
     );
     assert_eq!(
         offset_of!(crate::GuiDrawEffects, surface),
-        offset_of!(restricted_gui::effects::DrawEffects, surface)
+        offset_of!(tacita::effects::DrawEffects, surface)
     );
     assert_eq!(
         offset_of!(crate::GuiDrawEffects, filter),
-        offset_of!(restricted_gui::effects::DrawEffects, filter)
+        offset_of!(tacita::effects::DrawEffects, filter)
     );
     assert_eq!(
         offset_of!(crate::GuiDrawEffects, stencil),
-        offset_of!(restricted_gui::effects::DrawEffects, stencil)
+        offset_of!(tacita::effects::DrawEffects, stencil)
     );
     assert_eq!(
         (

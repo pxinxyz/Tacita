@@ -1,9 +1,9 @@
-use restricted_gui::context::Context as GuiContext;
-use restricted_gui::input::InputState;
-use restricted_gui::style::Style;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
-use restricted_gui_d3d11::{Context as D3dContext, D3d11Backend, Device, OffscreenTarget};
+use tacita::context::Context as GuiContext;
+use tacita::input::InputState;
+use tacita::style::Style;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
+use tacita_d3d11::{Context as D3dContext, D3d11Backend, Device, OffscreenTarget};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
 

@@ -17,7 +17,7 @@ unsafe impl GlobalAlloc for Count {
 }
 #[global_allocator]
 static ALLOCATOR: Count = Count;
-use restricted_gui::{
+use tacita::{
     context::Context,
     id::Id,
     input::{InputState, Key, KeyEvent, Modifiers},
@@ -67,7 +67,7 @@ fn frame(c: &mut Context, step: usize) {
 #[test]
 fn repeated_nesting_close_reopen_navigation_and_shortcuts_allocate_zero() {
     let mut c = Context::new(include_bytes!("assets/DejaVuSans.ttf")).unwrap();
-    c.set_motion_settings(restricted_gui::animation::MotionSettings {
+    c.set_motion_settings(tacita::animation::MotionSettings {
         enabled: true,
         ..Default::default()
     });

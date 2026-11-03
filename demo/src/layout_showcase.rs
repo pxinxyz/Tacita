@@ -1,11 +1,11 @@
 use super::DemoState;
-use restricted_gui::font::{FontId, FontInfo};
-use restricted_gui::layout::{
+use tacita::font::{FontId, FontInfo};
+use tacita::layout::{
     resolve_layout, LayoutAlign, LayoutItem, LayoutJustify, LayoutKind, LayoutSpec,
 };
-use restricted_gui::svg::{SvgError, SvgIconId};
-use restricted_gui::text::TextOptions;
-use restricted_gui::ui::Ui;
+use tacita::svg::{SvgError, SvgIconId};
+use tacita::text::TextOptions;
+use tacita::ui::Ui;
 
 const SVG_ICONS: [&str; 3] = [
     r#"<svg viewBox="0 0 24 24"><path d="M12 1 Q12 12 23 12 Q12 12 12 23 Q12 12 1 12 Q12 12 12 1Z"/></svg>"#,

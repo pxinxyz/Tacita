@@ -34,21 +34,21 @@ use cursor::OrbitalCursor;
 use inspector::InspectionSnapshot;
 use renderer::Renderer;
 
-use restricted_gui::animation::{pulse, Easing, MotionSettings};
-use restricted_gui::animation::{
+use tacita::animation::{pulse, Easing, MotionSettings};
+use tacita::animation::{
     GradientOptions, GradientStop, Keyframe, PlaybackMode, TimelineOptions,
 };
-use restricted_gui::context::Context;
-use restricted_gui::draw::TextureId;
-use restricted_gui::font::{FontId, FontInfo, IconFont};
-use restricted_gui::icon;
-use restricted_gui::input::{InputState, Key, KeyBinding, KeyEvent};
-use restricted_gui::panels::{DockState, DockZone, SplitAxis};
-use restricted_gui::style::Style;
-use restricted_gui::text::{TextAlign, TextOptions, TextOverflow, TextSpan};
-use restricted_gui::theme::{ThemeRole, ThemeTokens};
-use restricted_gui::ui::{Ui, ValidationState};
-use restricted_gui::{ScrollFlags, ScrollbarSkin, ScrollbarTrackClick};
+use tacita::context::Context;
+use tacita::draw::TextureId;
+use tacita::font::{FontId, FontInfo, IconFont};
+use tacita::icon;
+use tacita::input::{InputState, Key, KeyBinding, KeyEvent};
+use tacita::panels::{DockState, DockZone, SplitAxis};
+use tacita::style::Style;
+use tacita::text::{TextAlign, TextOptions, TextOverflow, TextSpan};
+use tacita::theme::{ThemeRole, ThemeTokens};
+use tacita::ui::{Ui, ValidationState};
+use tacita::{ScrollFlags, ScrollbarSkin, ScrollbarTrackClick};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -715,7 +715,7 @@ fn text_showcase(
     const PARAGRAPH: &str = "Text now flows inside its box. Resize the width to watch words wrap; switch wrapping off to compare clipping, truncation and ellipsis.\nUnicode stays intact: café, λ, naïve.\nAnExtremelyLongUnbrokenWordStillMakesProgressAtNarrowWidths.";
     ui.label("Clipped box / alignment / line limits");
     let color = state.style.text;
-    let mut shown = restricted_gui::text::TextMetrics::default();
+    let mut shown = tacita::text::TextMetrics::default();
     ui.preview_canvas("Text box##demo", [state.text_width, 150.0], |ui, rect| {
         ui.draw_rect_filled(
             [rect[0], rect[1]],
@@ -1108,7 +1108,7 @@ struct App {
     renderer_smoke: bool,
     #[cfg(windows)]
     screen_reader: Option<accessibility_host::ScreenReaderBridge>,
-    svg_icons: [restricted_gui::svg::SvgIconId; 9],
+    svg_icons: [tacita::svg::SvgIconId; 9],
     ctx: Context,
     state: DemoState,
     themes: [Style; 4],
@@ -1123,7 +1123,7 @@ struct App {
     native_cursor_icon: Option<CursorIcon>,
     ime_allowed: bool,
     ime_active: bool,
-    ime_owner: Option<restricted_gui::id::Id>,
+    ime_owner: Option<tacita::id::Id>,
     ime_composing: bool,
     chrome: ChromeMesh,
     cursor: OrbitalCursor,
@@ -1186,12 +1186,12 @@ impl App {
         ctx.set_font_fallback_chain(fallback, &[FontId::DEFAULT, color_emoji, emoji])
             .expect("registered fallback chain");
         state.text_editing.fallback_face = fallback;
-        ctx.set_text_raster_mode(restricted_gui::font::TextRasterMode::Subpixel);
+        ctx.set_text_raster_mode(tacita::font::TextRasterMode::Subpixel);
         warm_up_shapes(&mut ctx, [1350.0, 800.0], fallback);
         let renderer_smoke = std::env::args().any(|arg| arg == "--renderer-smoke");
         App {
             watchdog: frame_watchdog::FrameWatchdog::new(
-                renderer_smoke || std::env::var_os("RESTRICTED_GUI_WATCHDOG").is_some(),
+                renderer_smoke || std::env::var_os("TACITA_WATCHDOG").is_some(),
             ),
             renderer_smoke,
             #[cfg(windows)]
@@ -1342,7 +1342,7 @@ impl App {
         let software_cap = self.software_cap_enabled();
         self.apply_theme();
         self.ctx
-            .set_hit_target_policy(restricted_gui::host_requests::HitTargetPolicy {
+            .set_hit_target_policy(tacita::host_requests::HitTargetPolicy {
                 minimum: if self.state.host_services.large_targets {
                     [32.; 2]
                 } else {
@@ -1433,29 +1433,29 @@ impl App {
         self.ctx.set_scrollbar_skin(scrollbar_skin);
         self.ctx.set_motion_settings(self.state.motion);
         self.ctx.set_text_raster_mode(if self.state.text_subpixel {
-            restricted_gui::font::TextRasterMode::Subpixel
+            tacita::font::TextRasterMode::Subpixel
         } else {
-            restricted_gui::font::TextRasterMode::Legacy
+            tacita::font::TextRasterMode::Legacy
         });
         let panels = [
             (
                 "split",
-                restricted_gui::persistence::PanelState::Split {
+                tacita::persistence::PanelState::Split {
                     axis: SplitAxis::Horizontal,
                     ratio: self.state.split_ratio,
                 },
             ),
             (
                 "child",
-                restricted_gui::persistence::PanelState::Size(self.state.child_size),
+                tacita::persistence::PanelState::Size(self.state.child_size),
             ),
             (
                 "dock_left",
-                restricted_gui::persistence::PanelState::Dock(self.state.dock_left),
+                tacita::persistence::PanelState::Dock(self.state.dock_left),
             ),
             (
                 "dock_right",
-                restricted_gui::persistence::PanelState::Dock(self.state.dock_right),
+                tacita::persistence::PanelState::Dock(self.state.dock_right),
             ),
         ];
         let outcome = self.state.input_state.process(&mut self.ctx, &panels);
@@ -1468,7 +1468,7 @@ impl App {
             self.ctx.set_theme_tokens(tokens);
         }
         if let Some(layout) = outcome.layout {
-            use restricted_gui::persistence::PanelState;
+            use tacita::persistence::PanelState;
             if let Some(PanelState::Split { ratio, .. }) = layout.panel("split") {
                 self.state.split_ratio = ratio;
             }
@@ -2082,7 +2082,7 @@ impl App {
         };
         let rebuilt = self
             .ctx
-            .update_display_metrics(restricted_gui::display::DisplayMetrics {
+            .update_display_metrics(tacita::display::DisplayMetrics {
                 physical_size: [size.width, size.height],
                 scale: requested,
             });
@@ -2130,7 +2130,7 @@ impl ApplicationHandler for App {
         }
         let window = match event_loop.create_window(
             Window::default_attributes()
-                .with_title("restricted-gui demo")
+                .with_title("tacita demo")
                 .with_inner_size(winit::dpi::LogicalSize::new(1350.0, 800.0))
                 .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0))
                 .with_decorations(false)
@@ -2423,7 +2423,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Ime(event) => {
-                use restricted_gui::editing::TextEventKind;
+                use tacita::editing::TextEventKind;
                 use winit::event::Ime;
                 match event {
                     Ime::Enabled => self.ime_active = true,
@@ -2497,7 +2497,7 @@ impl ApplicationHandler for App {
 }
 
 fn interaction_showcase(ui: &mut Ui, state: &mut DemoState) {
-    use restricted_gui::drag_drop::DragPayload;
+    use tacita::drag_drop::DragPayload;
 
     ui.label("Keyboard: Tab / Shift+Tab moves focus; Enter / Space activates controls.");
     ui.checkbox("Inset page-step scrollbars", &mut state.custom_scrollbar);
@@ -2652,7 +2652,7 @@ mod dpi_tests {
             Some(&[FontId::DEFAULT, emoji[0], emoji[1]][..])
         );
         app.ctx
-            .set_text_raster_mode(restricted_gui::font::TextRasterMode::Legacy);
+            .set_text_raster_mode(tacita::font::TextRasterMode::Legacy);
         app.ctx.new_frame(1.0 / 60.0);
         {
             let mut ui = app.ctx.ui();
@@ -2694,7 +2694,7 @@ mod dpi_tests {
             Some(&[FontId::DEFAULT, chain[0], chain[1]][..])
         );
         let mut font = app.ctx.font().clone();
-        let mut layout = restricted_gui::font::ShapedText::default();
+        let mut layout = tacita::font::ShapedText::default();
         for cluster in ["👩‍💻", "🇬🇧", "👍🏽"] {
             layout
                 .prepare(&mut font, FontId::DEFAULT, cluster, Default::default())

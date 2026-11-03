@@ -1,5 +1,5 @@
 use crate::{gui_export, set_last_error, slice_arg, GuiCmd, GuiContext, GuiErrorCode};
-use restricted_gui::{
+use tacita::{
     draw::{DrawCmd, DrawData, DrawVert, TextureId},
     effects::DrawEffects,
     rendering::{CommandPlan, DrawOptimization, GeometryRange, QuadInstance},
@@ -291,7 +291,7 @@ mod tests {
     fn alpha_uniform_rejects_unknown_bits_before_writing() {
         let effect = DrawEffects::default();
         let pointer = (&effect as *const DrawEffects).cast::<crate::GuiDrawEffects>();
-        let mut bytes = [0xa5; restricted_gui::effects::EFFECT_UNIFORM_SIZE];
+        let mut bytes = [0xa5; tacita::effects::EFFECT_UNIFORM_SIZE];
         assert!(!unsafe {
             crate::gui_effect_uniform_alpha(pointer, 8, bytes.as_mut_ptr(), bytes.len())
         });

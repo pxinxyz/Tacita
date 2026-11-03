@@ -2,12 +2,12 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use restricted_gui::context::{Context as GuiContext, DEFAULT_FONT_SIZE};
-use restricted_gui::draw::{DrawCmd, DrawData, DrawVert};
-use restricted_gui::font::Font;
-use restricted_gui::input::InputState;
-use restricted_gui::ScrollFlags;
-use restricted_gui_d3d11::{D3d11Backend, OffscreenTarget};
+use tacita::context::{Context as GuiContext, DEFAULT_FONT_SIZE};
+use tacita::draw::{DrawCmd, DrawData, DrawVert};
+use tacita::font::Font;
+use tacita::input::InputState;
+use tacita::ScrollFlags;
+use tacita_d3d11::{D3d11Backend, OffscreenTarget};
 
 const FONT_BYTES: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
 const LOGICAL_SIZE: [u32; 2] = [720, 480];
@@ -191,7 +191,7 @@ fn primitives_widgets_and_dpi_match_captures() {
     ] {
         let (width, height, actual) = render_scene(scale);
         let baseline = baseline_path(name);
-        if std::env::var("RESTRICTED_GUI_UPDATE_VISUALS").as_deref() == Ok("1") {
+        if std::env::var("TACITA_UPDATE_VISUALS").as_deref() == Ok("1") {
             write_png(&baseline, width, height, &actual);
             eprintln!("updated {}", baseline.display());
             continue;

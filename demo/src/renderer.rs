@@ -1,4 +1,4 @@
-use restricted_gui::rendering::{
+use tacita::rendering::{
     AlphaMode, CommandPlan, DrawCalls, DrawOptimization, GeometryRange,
 };
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 mod renderer_options;
 use renderer_options::RasterBundle;
 
-use restricted_gui::draw::{DrawData, DrawVert, TextureId};
+use tacita::draw::{DrawData, DrawVert, TextureId};
 use winit::window::Window;
 
 use crate::chrome::ChromeMesh;
@@ -23,7 +23,7 @@ const VERTEX_SIZE: u64 = core::mem::size_of::<DrawVert>() as u64;
 struct RenderTarget {
     id: TextureId,
     texture: wgpu::Texture,
-    mode: restricted_gui::rendering::ColorMode,
+    mode: tacita::rendering::ColorMode,
     stencil: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
 
@@ -69,7 +69,7 @@ pub struct Renderer {
     index_capacity: u64,
     vertex_pool: Vec<(wgpu::Buffer, u64)>,
     index_pool: Vec<(wgpu::Buffer, u64)>,
-    stats: restricted_gui::rendering::RenderStats,
+    stats: tacita::rendering::RenderStats,
     timer: Option<crate::gpu_timing::GpuTimer>,
     offscreen_pipelines: [[wgpu::RenderPipeline; 6]; 2],
     targets: Vec<RenderTarget>,
@@ -340,7 +340,7 @@ impl Renderer {
             index_capacity,
             vertex_pool: Vec::new(),
             index_pool: Vec::new(),
-            stats: restricted_gui::rendering::RenderStats {
+            stats: tacita::rendering::RenderStats {
                 allocations: 3,
                 ..Default::default()
             },
@@ -351,7 +351,7 @@ impl Renderer {
         })
     }
 
-    pub fn stats(&mut self) -> restricted_gui::rendering::RenderStats {
+    pub fn stats(&mut self) -> tacita::rendering::RenderStats {
         if let Some(timer) = &mut self.timer {
             timer.poll(&self.device);
             self.stats.gpu_ms = timer.latest;
@@ -436,12 +436,12 @@ impl Renderer {
         &mut self,
         id: TextureId,
         size: [u32; 2],
-        mode: restricted_gui::rendering::ColorMode,
+        mode: tacita::rendering::ColorMode,
         scale: f32,
         draw: &DrawData,
         clear: [f64; 4],
     ) -> Result<(), String> {
-        use restricted_gui::rendering::ColorMode;
+        use tacita::rendering::ColorMode;
         if !scale.is_finite()
             || scale <= 0.
             || scale > 8.
@@ -626,7 +626,7 @@ impl Renderer {
                         continue;
                     };
                     let effect = if cmd.effects == 0 {
-                        restricted_gui::effects::DrawEffects::default()
+                        tacita::effects::DrawEffects::default()
                     } else if let Some(e) = draw.effects.get(cmd.effects as usize - 1) {
                         *e
                     } else {
@@ -757,7 +757,7 @@ impl Renderer {
         self.color_atlas_key = None;
     }
 
-    pub fn sync_color_atlas(&mut self, font: &restricted_gui::font::Font) {
+    pub fn sync_color_atlas(&mut self, font: &tacita::font::Font) {
         let Some(id) = font.color_atlas_texture() else {
             return;
         };
@@ -857,7 +857,7 @@ impl Renderer {
     pub fn prepare_gallery(
         &mut self,
         phase: f32,
-        blur: restricted_gui::effects::Blur,
+        blur: tacita::effects::Blur,
         threshold: f32,
         intensity: f32,
     ) {
@@ -1103,7 +1103,7 @@ impl Renderer {
                         continue;
                     };
                     let effect = if cmd.effects == 0 {
-                        restricted_gui::effects::DrawEffects::default()
+                        tacita::effects::DrawEffects::default()
                     } else if let Some(e) = draw.effects.get(cmd.effects as usize - 1) {
                         *e
                     } else {

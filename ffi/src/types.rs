@@ -1,7 +1,7 @@
-use restricted_gui::drag_drop::DragPayload;
-use restricted_gui::input::{KeyBinding, Modifiers};
-use restricted_gui::ScrollFlags;
-use restricted_gui::{ScrollbarSkin, ScrollbarTrackClick};
+use tacita::drag_drop::DragPayload;
+use tacita::input::{KeyBinding, Modifiers};
+use tacita::ScrollFlags;
+use tacita::{ScrollbarSkin, ScrollbarTrackClick};
 
 use crate::{key_from_code, key_to_code};
 
@@ -259,7 +259,7 @@ impl GuiKeyBinding {
 
 #[cfg(test)]
 mod tests {
-    use restricted_gui::input::{Key, KeyBinding, Modifiers};
+    use tacita::input::{Key, KeyBinding, Modifiers};
 
     use super::*;
 

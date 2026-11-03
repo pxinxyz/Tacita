@@ -2,7 +2,7 @@ use crate::style_watch::{ReloadStatus, StyleWatcher};
 use crate::{
     active_frame_ctx, gui_export, slice_arg, str_arg, GuiContext, GuiErrorCode, GuiRect, GuiStr,
 };
-use restricted_gui::{
+use tacita::{
     id::Id,
     input::Modifiers,
     interaction::{Navigation, Shortcut, ShortcutScope},

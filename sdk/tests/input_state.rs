@@ -1,5 +1,5 @@
-use restricted_gui::context::Context;
-use restricted_gui_sdk::{
+use tacita::context::Context;
+use tacita_sdk::{
     Gui, Id, InputState, Key, KeyEvent, Modifiers, Navigation, PanelState, ScrollFlags, Shortcut,
     ShortcutScope,
 };
@@ -74,7 +74,7 @@ fn snapshots_and_closed_shortcuts_preserve_core_contract() {
         .set_panel("size", PanelState::Size([200., 120.]))
         .unwrap();
     let bytes = layout.encode().unwrap();
-    let layout = restricted_gui_sdk::LayoutSnapshot::decode(&bytes).unwrap();
+    let layout = tacita_sdk::LayoutSnapshot::decode(&bytes).unwrap();
     sdk.load_layout(&layout).unwrap();
     assert_eq!(sdk.save_layout().windows, layout.windows);
     let text = sdk.save_theme().unwrap();

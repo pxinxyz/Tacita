@@ -1,5 +1,5 @@
 use crate::{gui_export, GuiContext, GuiErrorCode, GuiStr, GuiVec2};
-use restricted_gui::{
+use tacita::{
     accessibility::{AccessibilityAction, AccessibilityActionKind, AccessibilityRole},
     host_requests::{CursorShape, HitTargetPolicy},
     id::Id,

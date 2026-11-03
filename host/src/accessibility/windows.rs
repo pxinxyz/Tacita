@@ -1,5 +1,5 @@
 use super::*;
-use restricted_gui::accessibility::{
+use tacita::accessibility::{
     AccessibilityActionKind as Kind, AccessibilityActions as Actions, AccessibilityRole as Role,
     AccessibilityState as Flags,
 };
@@ -550,7 +550,7 @@ unsafe fn text_property(p: *mut Object, v: Variant, out: *mut *mut u16, which: u
             _ => FALSE,
         }
     } else if which == 0 {
-        bstr("restricted gui preview", out)
+        bstr("Tacita preview", out)
     } else {
         FALSE
     }
@@ -1000,11 +1000,11 @@ mod tests {
         ctx.set_accessibility_enabled(true);
         ctx.new_frame(0.016);
         ctx.ui()
-            .window("first", restricted_gui::ScrollFlags::NONE, |ui| {
+            .window("first", tacita::ScrollFlags::NONE, |ui| {
                 ui.button("one");
             });
         ctx.ui()
-            .window("second", restricted_gui::ScrollFlags::NONE, |ui| {
+            .window("second", tacita::ScrollFlags::NONE, |ui| {
                 ui.button("two");
             });
         ctx.render();

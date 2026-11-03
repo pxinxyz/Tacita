@@ -1,11 +1,11 @@
-# D3D11 backend for `restricted-gui` (std crate, Windows-only).
+# D3D11 backend for `tacita` (std crate, Windows-only).
 #
 # Sibling of `core`/`sdk` — the backend consumes core `DrawData` and never
 # touches widget logic; the dependency arrow points backend -> core only.
 # The host owns the device/context/swapchain; this crate owns no window.
 
 [package]
-name = "restricted-gui-d3d11"
+name = "tacita-d3d11"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 # The backend consumes core DrawData; the dependency arrow points
 # backend -> core only, never the reverse.
-restricted-gui = { path = "../../core" }
+tacita = { path = "../../core" }
 # Pinned at scaffold time (2026-07-23). Exact resolved version: see Cargo.lock.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -36,5 +36,5 @@ windows = { version = "0.62", features = [
 ] }
 # The example dogfoods the Win32 input adapter (message → InputState
 # translation); the library itself stays renderer-only.
-restricted-gui-win32 = { path = "../../adapters/win32" }
+tacita-win32 = { path = "../../adapters/win32" }
 png = "0.17"

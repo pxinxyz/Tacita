@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use restricted_gui::persistence::Config;
+use tacita::persistence::Config;
 fuzz_target!(|data: &[u8]| {
     if data.len() > 65536 {
         return;
@@ -12,7 +12,7 @@ fuzz_target!(|data: &[u8]| {
     }
     let mut registered = Config::new();
     registered
-        .register("enabled", restricted_gui::persistence::Value::Bool(true))
+        .register("enabled", tacita::persistence::Value::Bool(true))
         .unwrap();
     let before = registered.encode();
     if registered.load(data).is_err() {

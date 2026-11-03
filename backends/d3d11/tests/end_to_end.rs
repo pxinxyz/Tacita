@@ -1,9 +1,9 @@
-use restricted_gui::context::Context as GuiContext;
-use restricted_gui::input::{InputState, KeyEvent};
-use restricted_gui::style::Style;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
-use restricted_gui_d3d11::{Context as D3dContext, D3d11Backend, Device, OffscreenTarget};
+use tacita::context::Context as GuiContext;
+use tacita::input::{InputState, KeyEvent};
+use tacita::style::Style;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
+use tacita_d3d11::{Context as D3dContext, D3d11Backend, Device, OffscreenTarget};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../../core/tests/assets/DejaVuSans.ttf");
 
@@ -534,11 +534,11 @@ fn color_emoji_atlas_renders_palette_colors_and_disabled_opacity() {
             32.,
         )
         .unwrap();
-    ctx.set_font_fallback_chain(restricted_gui::font::FontId::DEFAULT, &[emoji])
+    ctx.set_font_fallback_chain(tacita::font::FontId::DEFAULT, &[emoji])
         .unwrap();
-    ctx.set_color_atlas_texture(Some(restricted_gui::draw::TextureId(90)))
+    ctx.set_color_atlas_texture(Some(tacita::draw::TextureId(90)))
         .unwrap();
-    let mut shaped = restricted_gui::font::ShapedText::default();
+    let mut shaped = tacita::font::ShapedText::default();
     let mut rect = [0.; 4];
     let mut peak = [0u8; 2];
     for (n, disabled) in [false, true].into_iter().enumerate() {

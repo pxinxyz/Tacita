@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, scroll_flags_from_bits, str_arg, ContainerKind, ContainerScope,
     GuiContext, GuiErrorCode, GuiRect, GuiScrollbarSkin, GuiVec2, WindowState,
 };
-use restricted_gui::id::Id;
+use tacita::id::Id;
 
 #[no_mangle]
 pub unsafe extern "C" fn gui_open_popup(ctx: *mut GuiContext, id: u64) {

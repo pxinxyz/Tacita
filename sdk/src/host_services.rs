@@ -1,11 +1,11 @@
 use crate::{Gui, Id};
 use alloc::string::String;
-pub use restricted_gui::accessibility::{
+pub use tacita::accessibility::{
     AccessibilityAction, AccessibilityActionKind, AccessibilityActions, AccessibilityNode,
     AccessibilityRole, AccessibilityState,
 };
-pub use restricted_gui::diagnostics::DuplicateId;
-pub use restricted_gui::host_requests::{CursorShape, HitTargetPolicy};
+pub use tacita::diagnostics::DuplicateId;
+pub use tacita::host_requests::{CursorShape, HitTargetPolicy};
 impl Gui {
     pub fn set_accessibility_enabled(&mut self, on: bool) {
         self.ctx.set_accessibility_enabled(on);

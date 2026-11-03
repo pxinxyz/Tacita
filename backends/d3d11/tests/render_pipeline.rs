@@ -1,5 +1,5 @@
-use restricted_gui::draw::{DrawCmd, DrawData, DrawVert, TextureId};
-use restricted_gui_d3d11::{Context as D3dContext, D3d11Backend, Device, OffscreenTarget};
+use tacita::draw::{DrawCmd, DrawData, DrawVert, TextureId};
+use tacita_d3d11::{Context as D3dContext, D3d11Backend, Device, OffscreenTarget};
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -363,17 +363,17 @@ fn per_pixel_radial_conic_and_nested_alpha_masks() {
         clip_rect: full_clip(),
         texture: TextureId::WHITE,
     }];
-    let mut effect = restricted_gui::effects::DrawEffects::default();
+    let mut effect = tacita::effects::DrawEffects::default();
     effect.gradient.rect = full_clip();
     effect.gradient.origin = [0.5; 2];
     effect.gradient.vector = [0.5; 2];
     effect.gradient.kind = 2;
     effect.gradient.stop_count = 2;
-    effect.gradient.stops[0] = restricted_gui::effects::GradientStop {
+    effect.gradient.stops[0] = tacita::effects::GradientStop {
         position: 0.0,
         color: [255, 0, 0, 255],
     };
-    effect.gradient.stops[1] = restricted_gui::effects::GradientStop {
+    effect.gradient.stops[1] = tacita::effects::GradientStop {
         position: 1.0,
         color: [0, 0, 255, 255],
     };
@@ -421,14 +421,14 @@ fn per_pixel_radial_conic_and_nested_alpha_masks() {
         .unwrap();
     effect.gradient = Default::default();
     effect.masks.count = 2;
-    effect.masks.ops[0] = restricted_gui::effects::MaskOp {
+    effect.masks.ops[0] = tacita::effects::MaskOp {
         texture: 42,
         kind: 1,
         rect: [8.0, 8.0, 56.0, 56.0],
         params: [0.0, 0.0, 1.0, 1.0],
         ..Default::default()
     };
-    effect.masks.ops[1] = restricted_gui::effects::MaskOp {
+    effect.masks.ops[1] = tacita::effects::MaskOp {
         kind: 2,
         rect: [0.0, 0.0, 64.0, 0.0],
         params: [1.0, 0.0, 0.0, 0.0],
@@ -487,9 +487,9 @@ fn invalid_effect_and_missing_mask_skip_without_losing_index_offsets() {
         [0.0; 2],
         [255; 4],
     );
-    let mut effect = restricted_gui::effects::DrawEffects::default();
+    let mut effect = tacita::effects::DrawEffects::default();
     effect.masks.count = 1;
-    effect.masks.ops[0] = restricted_gui::effects::MaskOp {
+    effect.masks.ops[0] = tacita::effects::MaskOp {
         kind: 1,
         texture: 999,
         rect: full_clip(),
@@ -552,7 +552,7 @@ fn sdf_edges_border_placement_glow_highlight_and_reveal_pixels() {
         clip_rect: full_clip(),
         texture: TextureId::WHITE,
     }];
-    let mut render = |effect: restricted_gui::effects::DrawEffects| {
+    let mut render = |effect: tacita::effects::DrawEffects| {
         let effects = [effect];
         let draw = DrawData {
             effects: &effects,
@@ -562,7 +562,7 @@ fn sdf_edges_border_placement_glow_highlight_and_reveal_pixels() {
         };
         render_on(&mut backend, &context, &target, &draw)
     };
-    let mut effect = restricted_gui::effects::DrawEffects::default();
+    let mut effect = tacita::effects::DrawEffects::default();
     effect.sdf.rect = [8.0, 8.0, 56.0, 56.0];
     effect.sdf.radii = [12.0, 0.0, 8.0, 4.0];
     effect.sdf.parameters = [1.0, 1.0, 0.0, 4.0];
@@ -629,7 +629,7 @@ fn sdf_edges_border_placement_glow_highlight_and_reveal_pixels() {
     assert_eq!(px(&pixels, 55, 32), BG, "opposite edge unlit");
     effect.sdf = Default::default();
     effect.masks.count = 1;
-    effect.masks.ops[0] = restricted_gui::effects::MaskOp {
+    effect.masks.ops[0] = tacita::effects::MaskOp {
         kind: 3,
         rect: full_clip(),
         params: [0.5, 0.0, 0.0, 0.0],
@@ -674,7 +674,7 @@ fn sdf_edges_border_placement_glow_highlight_and_reveal_pixels() {
 
 #[test]
 fn surface_desaturation_and_grain_preserve_alpha_and_caller_phase() {
-    use restricted_gui::effects::{DrawEffects, SurfaceStyle, SURFACE_DESATURATE, SURFACE_GRAIN};
+    use tacita::effects::{DrawEffects, SurfaceStyle, SURFACE_DESATURATE, SURFACE_GRAIN};
     let (mut backend, _device, context, target) = setup();
     let texture = TextureId(77);
     backend
@@ -757,7 +757,7 @@ fn surface_desaturation_and_grain_preserve_alpha_and_caller_phase() {
 
 #[test]
 fn stencil_push_pop_uses_rounded_contours_and_leaves_later_content_unclipped() {
-    use restricted_gui::effects::{DrawEffects, SdfShape};
+    use tacita::effects::{DrawEffects, SdfShape};
     let (mut backend, _device, context, target) = setup();
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -837,8 +837,8 @@ fn stencil_push_pop_uses_rounded_contours_and_leaves_later_content_unclipped() {
 
 #[test]
 fn gpu_capture_blur_and_threshold_bloom_reuse_targets_and_preserve_identity() {
-    use restricted_gui::effects::{Blur, BlurMethod, FilterPacket, FilterPlan, ImageFilter};
-    use restricted_gui_d3d11::{BackdropCapture, PostProcessor};
+    use tacita::effects::{Blur, BlurMethod, FilterPacket, FilterPlan, ImageFilter};
+    use tacita_d3d11::{BackdropCapture, PostProcessor};
     let (mut backend, _device, context, target) = setup();
     let mut rgba = vec![0; 64 * 64 * 4];
     for p in rgba.chunks_exact_mut(4) {
@@ -933,11 +933,11 @@ fn gpu_capture_blur_and_threshold_bloom_reuse_targets_and_preserve_identity() {
 #[test]
 fn sampleable_render_target_applies_managed_color_and_rejects_feedback() {
     let (mut backend, _device, context, target) = setup();
-    let render_texture = restricted_gui_d3d11::RenderTexture::new_encoded(
+    let render_texture = tacita_d3d11::RenderTexture::new_encoded(
         &mut backend,
         TextureId(50),
         [W, H],
-        restricted_gui_d3d11::ColorMode::Srgb,
+        tacita_d3d11::ColorMode::Srgb,
     )
     .unwrap();
     let mut vertices = Vec::new();

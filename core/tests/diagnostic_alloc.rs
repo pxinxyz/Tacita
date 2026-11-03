@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     context::Context,
     diagnostics::InputRecording,
     draw::TextureId,

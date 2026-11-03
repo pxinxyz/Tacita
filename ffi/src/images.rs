@@ -2,8 +2,8 @@ use crate::{
     active_frame_ctx, gui_export, str_arg, GuiColor, GuiContext, GuiErrorCode, GuiRect, GuiVec2,
     WindowState,
 };
-pub use restricted_gui::images::{ImageRegion as GuiImageRegion, NineSlice as GuiNineSlice};
-use restricted_gui::{
+pub use tacita::images::{ImageRegion as GuiImageRegion, NineSlice as GuiNineSlice};
+use tacita::{
     draw::TextureId,
     images::{ImageFit, SpriteAtlas, SpriteId},
 };

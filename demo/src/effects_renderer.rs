@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     draw::{DrawData, TextureId},
     effects::{DrawEffects, EFFECT_UNIFORM_SIZE},
 };

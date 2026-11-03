@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use restricted_gui::persistence::LayoutSnapshot;
+use tacita::persistence::LayoutSnapshot;
 fuzz_target!(|data: &[u8]| {
     if data.len() > 65536 {
         return;

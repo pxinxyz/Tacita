@@ -1,4 +1,4 @@
-// smoke.cpp — real C++ consumer of restricted_gui.h: creates a context
+// smoke.cpp — real C++ consumer of tacita.h: creates a context
 // from a TTF font, declares one frame with a scrollable window holding a
 // child container, a checkbox, a slider, and a button, renders it, and
 // asserts the draw data is non-empty. Compiled
@@ -10,7 +10,7 @@
 // Portable file reading with plain fopen (MSVC deprecates it otherwise).
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "../restricted_gui.h"
+#include "../tacita.h"
 
 #include <cstdio>
 #include <cstdlib>

@@ -1,5 +1,5 @@
-use restricted_gui::draw::{DrawCmd, DrawData, DrawVert, TextureId};
-use restricted_gui_sdk::{AlphaMode, CommandPlan, DrawOptimization, GeometryRange, QuadInstance};
+use tacita::draw::{DrawCmd, DrawData, DrawVert, TextureId};
+use tacita_sdk::{AlphaMode, CommandPlan, DrawOptimization, GeometryRange, QuadInstance};
 #[test]
 fn portable_planner_is_available_without_gpu_dependencies() {
     let vertices = [[0., 0.], [10., 0.], [10., 10.], [0., 10.]].map(|pos| DrawVert {

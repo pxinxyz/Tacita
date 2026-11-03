@@ -1,6 +1,6 @@
 use std::f32::consts::{PI, TAU};
 
-use restricted_gui::draw::DrawVert;
+use tacita::draw::DrawVert;
 
 const ARC_POINTS: usize = 15;
 const DISC_POINTS: usize = 12;

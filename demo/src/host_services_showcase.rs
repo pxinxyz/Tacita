@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     accessibility::{AccessibilityAction, AccessibilityActionKind, AccessibilityNode},
     context::Context,
     host_requests::CursorShape,
@@ -21,7 +21,7 @@ pub struct State {
     pub bridge_status: String,
     pub pending: Option<AccessibilityAction>,
     pub selected: usize,
-    preview_root: Option<restricted_gui::id::Id>,
+    preview_root: Option<tacita::id::Id>,
 }
 impl State {
     pub fn collect(&mut self, ctx: &Context) {
@@ -100,7 +100,7 @@ impl State {
         ui.child(
             "semantic tree",
             [preview_width, 200.],
-            restricted_gui::ScrollFlags::BAR,
+            tacita::ScrollFlags::BAR,
             |ui| {
                 for (i, (node, name, value)) in self.nodes.iter().enumerate() {
                     if ui.radio_button(

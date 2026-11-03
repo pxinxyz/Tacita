@@ -1,5 +1,5 @@
 /*
- * restricted_gui.h — C++ API contract for the `restricted-gui-ffi` crate.
+ * tacita.h — C++ API contract for the `tacita-ffi` crate.
  *
  * Hand-written; matches `ffi/src/*.rs` exactly. Consistency is enforced
  * from both sides:
@@ -44,8 +44,8 @@
  * The layout asserts below are written for that ABI.
  */
 
-#ifndef RESTRICTED_GUI_H
-#define RESTRICTED_GUI_H
+#ifndef TACITA_H
+#define TACITA_H
 
 #include <cstddef>
 #include <cstdint>
@@ -1730,4 +1730,4 @@ static_assert(sizeof(GuiQuadInstance)==80 && alignof(GuiQuadInstance)==4 && offs
 } /* extern "C" */
 #endif
 
-#endif /* RESTRICTED_GUI_H */
+#endif /* TACITA_H */

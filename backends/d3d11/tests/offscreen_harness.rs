@@ -1,4 +1,4 @@
-use restricted_gui_d3d11::{D3d11Backend, OffscreenTarget};
+use tacita_d3d11::{D3d11Backend, OffscreenTarget};
 
 #[test]
 fn device_creation_succeeds() {

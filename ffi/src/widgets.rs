@@ -1,4 +1,4 @@
-use restricted_gui::ui::ValidationState;
+use tacita::ui::ValidationState;
 use std::ptr;
 
 use crate::{
@@ -1573,7 +1573,7 @@ mod tests {
         window_frame(ctx, AWAY, false, |ctx| {
             assert!(!declare(ctx, &mut selected))
         });
-        let style = restricted_gui::style::Style::default();
+        let style = tacita::style::Style::default();
         let inset =
             style.border_size + style.corner_rounding * (1.0 - core::f32::consts::FRAC_1_SQRT_2);
         let origin = m.content_origin();
@@ -1856,7 +1856,7 @@ mod tests {
             },
         ];
         let mut selected = 1usize;
-        let style = restricted_gui::style::Style::default();
+        let style = tacita::style::Style::default();
         let m = Metrics::new();
         let inset =
             style.border_size + style.corner_rounding * (1.0 - core::f32::consts::FRAC_1_SQRT_2);

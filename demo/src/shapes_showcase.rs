@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     draw::TextureId,
     shapes::{BorderPlacement, RoundedRect, Shadow},
     ui::Ui,
@@ -89,7 +89,7 @@ pub(super) fn show(
     state: &mut State,
     texture: TextureId,
     density: f32,
-    style: restricted_gui::style::Style,
+    style: tacita::style::Style,
     mask_texture: TextureId,
     time: f32,
     motion_active: bool,
@@ -226,11 +226,11 @@ fn effects_showcase(
     texture: TextureId,
     mask_texture: TextureId,
     density: f32,
-    style: restricted_gui::style::Style,
+    style: tacita::style::Style,
     time: f32,
     motion_active: bool,
 ) {
-    use restricted_gui::effects::{
+    use tacita::effects::{
         AlphaMask, GradientKind, GradientMask, GradientPaint, GradientSpread, GradientStop,
     };
     let elapsed = (time - state.last_time).clamp(0.0, 0.1);
@@ -421,13 +421,13 @@ fn sdf_showcase(
     state: &mut State,
     texture: TextureId,
     density: f32,
-    style: restricted_gui::style::Style,
+    style: tacita::style::Style,
     elapsed: f32,
     motion_active: bool,
-    stops: &[restricted_gui::effects::GradientStop],
-    paint: restricted_gui::effects::GradientPaint,
+    stops: &[tacita::effects::GradientStop],
+    paint: tacita::effects::GradientPaint,
 ) {
-    use restricted_gui::effects::{RevealDirection, RevealMask, SdfKind, SdfStyle};
+    use tacita::effects::{RevealDirection, RevealMask, SdfKind, SdfStyle};
     if motion_active && state.rotate_light {
         state.light_angle = (state.light_angle + elapsed * 0.45).rem_euclid(std::f32::consts::TAU);
     }

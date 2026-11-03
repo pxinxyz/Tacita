@@ -182,22 +182,22 @@ fn edit_composition_clipboard_and_between_frame_guards() {
         let keys = [
             GuiKeyEvent {
                 kind: GUI_KEY_EVENT_PRESS,
-                key: crate::key_to_code(restricted_gui::input::Key::Ctrl),
+                key: crate::key_to_code(tacita::input::Key::Ctrl),
                 ch: 0,
             },
             GuiKeyEvent {
                 kind: GUI_KEY_EVENT_PRESS,
-                key: crate::key_to_code(restricted_gui::input::Key::A),
+                key: crate::key_to_code(tacita::input::Key::A),
                 ch: 0,
             },
             GuiKeyEvent {
                 kind: GUI_KEY_EVENT_PRESS,
-                key: crate::key_to_code(restricted_gui::input::Key::X),
+                key: crate::key_to_code(tacita::input::Key::X),
                 ch: 0,
             },
             GuiKeyEvent {
                 kind: GUI_KEY_EVENT_RELEASE,
-                key: crate::key_to_code(restricted_gui::input::Key::Ctrl),
+                key: crate::key_to_code(tacita::input::Key::Ctrl),
                 ch: 0,
             },
         ];

@@ -1,4 +1,4 @@
-use restricted_gui::draw::TextureId;
+use tacita::draw::TextureId;
 
 use crate::{active_frame_ctx, gui_export, str_arg, GuiColor, GuiContext, GuiErrorCode, GuiVec2};
 

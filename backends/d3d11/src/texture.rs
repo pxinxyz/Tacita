@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use restricted_gui::draw::TextureId;
+use tacita::draw::TextureId;
 use windows::Win32::Foundation::E_UNEXPECTED;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,

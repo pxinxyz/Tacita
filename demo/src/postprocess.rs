@@ -1,5 +1,5 @@
 use crate::renderer::{create_bind_group, index_bytes, proj_matrix, vertex_bytes};
-use restricted_gui::{
+use tacita::{
     draw::TextureId,
     effects::{
         Blur, DrawEffects, FilterPacket, FilterPlan, ImageFilter, SurfaceStyle, SURFACE_DISTORT,
@@ -269,7 +269,7 @@ impl Gallery {
         blur: Blur,
         threshold: f32,
         intensity: f32,
-    ) -> Result<Vec<(TextureId, wgpu::Texture)>, restricted_gui::effects::EffectError> {
+    ) -> Result<Vec<(TextureId, wgpu::Texture)>, tacita::effects::EffectError> {
         let device = resources.device;
         let queue = resources.queue;
         let blur_plan = FilterPlan::blur(SIZE, blur)?;

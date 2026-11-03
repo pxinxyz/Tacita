@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     data::{
         CurveEditor, CurveInterpolation, CurveKey, DataTableOptions, DataTableState,
         GradientEditor, NumericEdit, PlotOptions, Selection, SortSpec,
@@ -106,7 +106,7 @@ impl Default for State {
 impl State {
     fn draw_editors(&mut self, ui: &mut Ui<'_>) {
         let width = ui.available_width().clamp(100., 600.);
-        let accent = ui.theme_color(restricted_gui::theme::ThemeRole::Accent);
+        let accent = ui.theme_color(tacita::theme::ThemeRole::Accent);
         ui.label("Plots / 100,000 samples with one narrow peak");
         ui.checkbox("Auto range", &mut self.auto_range);
         ui.same_line();

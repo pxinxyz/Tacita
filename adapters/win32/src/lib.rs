@@ -1,7 +1,7 @@
 #![cfg(windows)]
 #![forbid(unsafe_code)]
 
-use restricted_gui::input::{InputState, Key, KeyEvent};
+use tacita::input::{InputState, Key, KeyEvent};
 
 const WM_KEYDOWN: u32 = 0x0100;
 const WM_KEYUP: u32 = 0x0101;

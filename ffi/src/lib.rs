@@ -2,17 +2,17 @@ use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
-use restricted_gui::context::Context;
+use tacita::context::Context;
 mod host_services;
 pub use host_services::*;
 #[path = "../../host/src/accessibility/mod.rs"]
 pub mod accessibility_host;
-use restricted_gui::font::FontId;
-use restricted_gui::input::{InputState, Key, KeyEvent};
-use restricted_gui::panels::{
+use tacita::font::FontId;
+use tacita::input::{InputState, Key, KeyEvent};
+use tacita::panels::{
     DockPanelScope, DockspaceScope, PanelCellScope, ResizableChildScope, SplitScope, TableScope,
 };
-use restricted_gui::ui::{ChildScope, CollapsingHeaderScope, DisabledScope, TreeNodeScope};
+use tacita::ui::{ChildScope, CollapsingHeaderScope, DisabledScope, TreeNodeScope};
 
 mod animation;
 mod canvas;
@@ -401,20 +401,20 @@ pub(crate) enum ContainerKind {
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ContainerScope {
-    Rows(restricted_gui::data::RowClipperScope),
-    DataTable(restricted_gui::data::DataTableScope),
-    DataCell(restricted_gui::data::DataCellScope),
-    MenuBar(restricted_gui::data::MenuBarScope),
-    PropertyGrid(restricted_gui::data::PropertyGridScope),
-    PropertyRow(restricted_gui::data::DataCellScope),
+    Rows(tacita::data::RowClipperScope),
+    DataTable(tacita::data::DataTableScope),
+    DataCell(tacita::data::DataCellScope),
+    MenuBar(tacita::data::MenuBarScope),
+    PropertyGrid(tacita::data::PropertyGridScope),
+    PropertyRow(tacita::data::DataCellScope),
     DataMenu,
 
-    Stencil(restricted_gui::effects::StencilScope),
-    Mask(restricted_gui::effects::MaskScope),
-    RoundedClip(restricted_gui::shapes::RoundedClipScope),
-    Layout(restricted_gui::layout::LayoutScope),
-    LayoutItem(restricted_gui::layout::LayoutItemScope),
-    AnimatedLayout(restricted_gui::animation::AnimatedLayoutScope),
+    Stencil(tacita::effects::StencilScope),
+    Mask(tacita::effects::MaskScope),
+    RoundedClip(tacita::shapes::RoundedClipScope),
+    Layout(tacita::layout::LayoutScope),
+    LayoutItem(tacita::layout::LayoutItemScope),
+    AnimatedLayout(tacita::animation::AnimatedLayoutScope),
     Header(Option<CollapsingHeaderScope>),
     Tree(Option<TreeNodeScope>),
     ScrollRegion(ChildScope),
@@ -823,8 +823,8 @@ pub unsafe extern "C" fn gui_pop_font(ctx: *mut GuiContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restricted_gui::context::Context;
-    use restricted_gui::draw::{DrawVert, TextureId};
+    use tacita::context::Context;
+    use tacita::draw::{DrawVert, TextureId};
 
     const DEJAVU_SANS: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");
 
@@ -955,7 +955,7 @@ mod tests {
             (&mut *ctx)
                 .ctx
                 .ui()
-                .window("ffi", restricted_gui::ScrollFlags::NONE, |ui| {
+                .window("ffi", tacita::ScrollFlags::NONE, |ui| {
                     ui.label("hello ffi")
                 })
         };

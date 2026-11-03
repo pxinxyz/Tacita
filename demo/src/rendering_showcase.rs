@@ -1,5 +1,5 @@
 use crate::{renderer::Renderer, shader_watch::ShaderWatcher};
-use restricted_gui::{
+use tacita::{
     draw::TextureId,
     rendering::{AlphaMode, DrawOptimization},
     ui::Ui,
@@ -219,10 +219,10 @@ impl State {
             ui.text_block(
                 &self.message,
                 ui.available_size()[0].max(160.),
-                restricted_gui::text::TextOptions {
+                tacita::text::TextOptions {
                     wrap: true,
                     max_lines: 6,
-                    overflow: restricted_gui::text::TextOverflow::Ellipsis,
+                    overflow: tacita::text::TextOverflow::Ellipsis,
                     ..Default::default()
                 },
             );

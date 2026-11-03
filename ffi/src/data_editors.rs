@@ -2,7 +2,7 @@ use crate::data::{canvas, invalid, target};
 use crate::{
     gui_export, slice_arg, str_arg, GuiColor, GuiContext, GuiGradientStop, GuiStr, GuiVec2,
 };
-use restricted_gui::{
+use tacita::{
     animation::GradientStop,
     data::{
         CurveEditor, CurveInterpolation, CurveKey, GradientEditor, PlotOptions, MAX_CURVE_KEYS,

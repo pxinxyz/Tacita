@@ -3,7 +3,7 @@ mod offscreen;
 mod rendering_options;
 mod timing;
 pub use compositor::{BackdropCapture, PostProcessor, RenderTexture};
-pub use restricted_gui::rendering::{
+pub use tacita::rendering::{
     AlphaMode, ColorMode, DrawOptimization, RenderStats, TextureEncoding, UploadStrategy,
 };
 mod shader;
@@ -11,7 +11,7 @@ mod texture;
 
 use std::fmt;
 
-use restricted_gui::draw::{DrawData, DrawVert, TextureId};
+use tacita::draw::{DrawData, DrawVert, TextureId};
 use texture::TextureSet;
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{E_UNEXPECTED, HMODULE, RECT};
@@ -159,7 +159,7 @@ struct Pipeline {
 
 pub struct D3d11Backend {
     optimization: DrawOptimization,
-    plan: restricted_gui::rendering::CommandPlan,
+    plan: tacita::rendering::CommandPlan,
     alpha_mode: AlphaMode,
     texture_alpha: Vec<(TextureId, AlphaMode)>,
     color_mode: ColorMode,
@@ -272,7 +272,7 @@ impl D3d11Backend {
     }
     pub fn upload_color_font_atlas(
         &mut self,
-        font: &restricted_gui::font::Font,
+        font: &tacita::font::Font,
     ) -> Result<(), BackendError> {
         let Some(id) = font.color_atlas_texture() else {
             return Ok(());
@@ -322,7 +322,7 @@ impl D3d11Backend {
             || self.plan.draws().iter().any(|d| {
                 matches!(
                     d.geometry,
-                    restricted_gui::rendering::GeometryRange::Triangles { .. }
+                    tacita::rendering::GeometryRange::Triangles { .. }
                 )
             });
         self.ensure_buffer_capacity(
@@ -371,7 +371,7 @@ impl D3d11Backend {
             }
             let mut bound_effects = None;
             let mut bound_mode = None;
-            'commands: for (cmd, geometry) in restricted_gui::rendering::DrawCalls::new(
+            'commands: for (cmd, geometry) in tacita::rendering::DrawCalls::new(
                 draw_data,
                 self.optimization.enabled().then_some(&self.plan),
             ) {
@@ -385,14 +385,14 @@ impl D3d11Backend {
                 };
                 let Some(srv) = self.textures.srv_for(cmd.texture).cloned() else {
                     eprintln!(
-                        "restricted-gui-d3d11: skipping draw command: host texture id {} is not \
+                        "tacita-d3d11: skipping draw command: host texture id {} is not \
                      registered (register it with `add_host_texture`; backend contract §7)",
                         cmd.texture.0
                     );
                     continue;
                 };
                 let effects = if cmd.effects == 0 {
-                    restricted_gui::effects::DrawEffects::default()
+                    tacita::effects::DrawEffects::default()
                 } else if let Some(value) = draw_data.effects.get(cmd.effects as usize - 1) {
                     *value
                 } else {
@@ -438,7 +438,7 @@ impl D3d11Backend {
                     }
                     bound_mode = Some(mode);
                 }
-                let flags = restricted_gui::rendering::alpha_flags(
+                let flags = tacita::rendering::alpha_flags(
                     self.texture_alpha_mode(cmd.texture),
                     self.alpha_mode,
                     self.texture_alpha_mode(effects.mask_texture(3).unwrap_or(TextureId::WHITE)),
@@ -467,7 +467,7 @@ impl D3d11Backend {
                     self.context.RSSetScissorRects(Some(&[scissor]));
                     self.context.PSSetShaderResources(0, Some(&[Some(srv)]));
                     match geometry {
-                        restricted_gui::rendering::GeometryRange::Triangles {
+                        tacita::rendering::GeometryRange::Triangles {
                             first_index,
                             index_count,
                         } => {
@@ -489,7 +489,7 @@ impl D3d11Backend {
                             );
                             self.context.DrawIndexed(index_count, first_index, 0);
                         }
-                        restricted_gui::rendering::GeometryRange::Quads {
+                        tacita::rendering::GeometryRange::Quads {
                             first_instance,
                             instance_count,
                         } => {
@@ -719,7 +719,7 @@ impl D3d11Backend {
 
     fn write_effects(
         &self,
-        effects: restricted_gui::effects::DrawEffects,
+        effects: tacita::effects::DrawEffects,
         flags: u32,
     ) -> Result<(), BackendError> {
         let bytes = effects.uniform_bytes_with_alpha(flags);
@@ -913,7 +913,7 @@ fn create_pipeline(
     let constant_buffer = create_dynamic_buffer(device, 64, D3D11_BIND_CONSTANT_BUFFER)?;
     let effects_buffer = create_dynamic_buffer(
         device,
-        restricted_gui::effects::EFFECT_UNIFORM_SIZE as u32,
+        tacita::effects::EFFECT_UNIFORM_SIZE as u32,
         D3D11_BIND_CONSTANT_BUFFER,
     )?;
 

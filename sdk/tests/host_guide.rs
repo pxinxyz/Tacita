@@ -1,4 +1,4 @@
-use restricted_gui_sdk::{FontId, Gui, InputState, Key, KeyBinding, KeyEvent, ScrollFlags};
+use tacita_sdk::{FontId, Gui, InputState, Key, KeyBinding, KeyEvent, ScrollFlags};
 
 const DEJAVU_SANS: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");
 
@@ -223,7 +223,7 @@ impl ScrollPanel {
     }
 }
 
-fn scroll_run(detail_scrollable: bool, pos: [f32; 2]) -> Vec<restricted_gui_sdk::DrawVert> {
+fn scroll_run(detail_scrollable: bool, pos: [f32; 2]) -> Vec<tacita_sdk::DrawVert> {
     let mut gui = Gui::new(DEJAVU_SANS).expect("bundled font must load");
     let mut panel = ScrollPanel {
         lines: 30,
@@ -293,7 +293,7 @@ fn scroll_frame(
     panel: &mut ScrollPanel,
     pos: [f32; 2],
     wheel: f32,
-) -> Vec<restricted_gui_sdk::DrawVert> {
+) -> Vec<tacita_sdk::DrawVert> {
     gui.new_frame(
         InputState {
             mouse_pos: pos,

@@ -9,67 +9,67 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::RangeInclusive;
 
-use restricted_gui::context::Context;
-use restricted_gui::panels::{
+use tacita::context::Context;
+use tacita::panels::{
     DockPanelScope, DockspaceScope, PanelCellScope, ResizableChildScope, SplitScope, TableScope,
 };
-pub use restricted_gui::panels::{DockState, DockZone, SplitAxis};
-pub use restricted_gui::ui::ValidationState;
-use restricted_gui::ui::{ChildScope, CollapsingHeaderScope, DisabledScope, TreeNodeScope};
+pub use tacita::panels::{DockState, DockZone, SplitAxis};
+pub use tacita::ui::ValidationState;
+use tacita::ui::{ChildScope, CollapsingHeaderScope, DisabledScope, TreeNodeScope};
 
-pub use restricted_gui::animation::{lerp_color, pulse, Easing, MotionSettings, Spring, Tween};
-pub use restricted_gui::animation::{
+pub use tacita::animation::{lerp_color, pulse, Easing, MotionSettings, Spring, Tween};
+pub use tacita::animation::{
     sample_keyframes, GradientOptions, GradientSpread, GradientStop, Keyframe, PlaybackMode,
     Timeline, TimelineOptions,
 };
-pub use restricted_gui::draw::{DrawCmd, DrawData, DrawVert, TextureId};
-pub use restricted_gui::shapes::{BorderPlacement, RoundedRect, Shadow, ShapeError};
-pub use restricted_gui::svg::{rasterize_svg, SvgBitmap, SvgError, SvgIconId};
-pub use restricted_gui::text::{TextAlign, TextMetrics, TextOptions, TextOverflow, TextSpan};
-pub use restricted_gui::theme::{ThemeRole, ThemeTokens};
+pub use tacita::draw::{DrawCmd, DrawData, DrawVert, TextureId};
+pub use tacita::shapes::{BorderPlacement, RoundedRect, Shadow, ShapeError};
+pub use tacita::svg::{rasterize_svg, SvgBitmap, SvgError, SvgIconId};
+pub use tacita::text::{TextAlign, TextMetrics, TextOptions, TextOverflow, TextSpan};
+pub use tacita::theme::{ThemeRole, ThemeTokens};
 mod data;
 mod editing;
 mod paths;
 mod shapes;
-pub use restricted_gui::data::{
+pub use tacita::data::{
     CurveEditor, CurveInterpolation, CurveKey, GradientEditor, PlotHover, PlotOptions,
     MAX_CURVE_KEYS, MAX_EDITOR_STOPS, MAX_PLOT_COLUMNS,
 };
-pub use restricted_gui::data::{
+pub use tacita::data::{
     DataError, DataTableOptions, DataTableState, NumericEdit, Selection, SortSpec, VisibleRows,
     MAX_DATA_COLUMNS, MAX_DATA_ROWS,
 };
-pub use restricted_gui::editing::{
+pub use tacita::editing::{
     ClipboardAction, ClipboardRequest, EditError, TextCaret, TextEditOptions, TextEditResponse,
     TextEditor, TextEventKind, MAX_EDIT_BYTES,
 };
-pub use restricted_gui::font::{
+pub use tacita::font::{
     CaretPosition, ShapedGlyph, ShapedOptions, ShapedText, TextDirection,
 };
-pub use restricted_gui::layout::{
+pub use tacita::layout::{
     resolve_layout_extended, ContentAlign, GridCell, LayoutOptions, GRID_AUTO,
 };
-pub use restricted_gui::paths::{
+pub use tacita::paths::{
     DashPattern, LineCap, LineJoin, PathError, StrokeStyle, MAX_DASH_LENGTHS, MAX_PATH_POINTS,
     MAX_POLYGON_POINTS,
 };
 mod images;
-pub use restricted_gui::diagnostics::{
+pub use tacita::diagnostics::{
     InputRecording, InspectionFlags, InspectionKind, InspectionNode, RecordedFrame, ReplayCursor,
     ReplayError,
 };
-pub use restricted_gui::display::DisplayMetrics;
-pub use restricted_gui::images::{
+pub use tacita::display::DisplayMetrics;
+pub use tacita::images::{
     ImageError, ImageFit, ImageRegion, NineSlice, SpriteAtlas, SpriteId,
 };
-pub use restricted_gui::rendering::{
+pub use tacita::rendering::{
     AlphaMode, ColorMode, CommandPlan, DrawCalls, DrawOptimization, GeometryRange, PlanError,
     PlannedDraw, QuadInstance, RenderStats, TextureEncoding, UploadStrategy,
 };
 mod effects;
 mod input_state;
-pub use restricted_gui::drag_drop::DragPayload;
-pub use restricted_gui::effects::{
+pub use tacita::drag_drop::DragPayload;
+pub use tacita::effects::{
     AlphaMask, Blur, BlurMethod, DitherKind, DrawEffects, EffectError, FilterKind, FilterPacket,
     FilterPlan, FilterStep, GradientFill, GradientKind, GradientMask, GradientPaint, ImageFilter,
     MaskOp, MaskScope, MaskStack, RevealDirection, RevealMask, SdfKind, SdfShape, SdfStyle,
@@ -78,40 +78,40 @@ pub use restricted_gui::effects::{
     SURFACE_DOTS, SURFACE_GLASS, SURFACE_GRADE, SURFACE_GRAIN, SURFACE_GRID, SURFACE_NOISE,
     SURFACE_SCANLINES, SURFACE_SHIMMER, SURFACE_SWEEP, SURFACE_VIGNETTE,
 };
-pub use restricted_gui::font::{
+pub use tacita::font::{
     ColorFontError, Font, FontError, FontId, FontInfo, IconFont, TextRasterMode,
 };
-pub use restricted_gui::icon;
-pub use restricted_gui::id::Id;
-pub use restricted_gui::input::{InputState, Key, KeyBinding, KeyEvent, Modifiers};
-pub use restricted_gui::interaction::{Navigation, Shortcut, ShortcutScope, MAX_POPUPS};
-pub use restricted_gui::layout::{
+pub use tacita::icon;
+pub use tacita::id::Id;
+pub use tacita::input::{InputState, Key, KeyBinding, KeyEvent, Modifiers};
+pub use tacita::interaction::{Navigation, Shortcut, ShortcutScope, MAX_POPUPS};
+pub use tacita::layout::{
     resolve_layout, LayoutAlign, LayoutError, LayoutGeometry, LayoutItem, LayoutJustify,
     LayoutKind, LayoutSpec, MAX_LAYOUT_ITEMS,
 };
-pub use restricted_gui::persistence::{
+pub use tacita::persistence::{
     decode_theme, encode_theme, Config, History, LayoutSnapshot, PanelLayout, PanelState,
     StateError, Value, WindowLayout,
 };
-pub use restricted_gui::style::Style;
-pub use restricted_gui::ScrollFlags;
-pub use restricted_gui::{ScrollbarSkin, ScrollbarTrackClick};
+pub use tacita::style::Style;
+pub use tacita::ScrollFlags;
+pub use tacita::{ScrollbarSkin, ScrollbarTrackClick};
 
 #[allow(clippy::large_enum_variant)]
 enum Scope {
-    Rows(Option<restricted_gui::data::RowClipperScope>),
-    DataTable(Option<restricted_gui::data::DataTableScope>),
-    DataCell(Option<restricted_gui::data::DataCellScope>),
-    MenuBar(Option<restricted_gui::data::MenuBarScope>),
+    Rows(Option<tacita::data::RowClipperScope>),
+    DataTable(Option<tacita::data::DataTableScope>),
+    DataCell(Option<tacita::data::DataCellScope>),
+    MenuBar(Option<tacita::data::MenuBarScope>),
     DataMenu,
-    PropertyGrid(Option<restricted_gui::data::PropertyGridScope>),
-    PropertyRow(Option<restricted_gui::data::DataCellScope>),
-    Stencil(Option<restricted_gui::effects::StencilScope>),
-    Mask(Option<restricted_gui::effects::MaskScope>),
-    RoundedClip(Option<restricted_gui::shapes::RoundedClipScope>),
-    Layout(Option<restricted_gui::layout::LayoutScope>),
-    LayoutItem(Option<restricted_gui::layout::LayoutItemScope>),
-    AnimatedLayout(Option<restricted_gui::animation::AnimatedLayoutScope>),
+    PropertyGrid(Option<tacita::data::PropertyGridScope>),
+    PropertyRow(Option<tacita::data::DataCellScope>),
+    Stencil(Option<tacita::effects::StencilScope>),
+    Mask(Option<tacita::effects::MaskScope>),
+    RoundedClip(Option<tacita::shapes::RoundedClipScope>),
+    Layout(Option<tacita::layout::LayoutScope>),
+    LayoutItem(Option<tacita::layout::LayoutItemScope>),
+    AnimatedLayout(Option<tacita::animation::AnimatedLayoutScope>),
     CollapsingHeader(Option<CollapsingHeaderScope>),
     TreeNode(Option<TreeNodeScope>),
     ScrollRegion(Option<ChildScope>),

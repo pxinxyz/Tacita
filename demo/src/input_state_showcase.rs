@@ -1,5 +1,5 @@
 use crate::style_watch::{ReloadStatus, StyleWatcher};
-use restricted_gui::{
+use tacita::{
     context::Context,
     id::Id,
     input::{Key, Modifiers},
@@ -260,12 +260,12 @@ impl State {
         ui.draw_rect_filled(
             [rect[0], rect[1]],
             [rect[2], rect[3]],
-            ui.theme_color(restricted_gui::theme::ThemeRole::Input),
+            ui.theme_color(tacita::theme::ThemeRole::Input),
         );
         ui.draw_text_at(
             [rect[0] + 8., rect[1] + 4.],
             "Double-click here to reset gain",
-            ui.theme_color(restricted_gui::theme::ThemeRole::Text),
+            ui.theme_color(tacita::theme::ThemeRole::Text),
         );
         ui.label(&format!(
             "Double clicks: {} / target activations: {}",

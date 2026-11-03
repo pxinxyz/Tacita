@@ -1,5 +1,5 @@
 use crate::renderer::Renderer;
-use restricted_gui::{
+use tacita::{
     context::Context,
     diagnostics::{InputRecording, ReplayCursor},
     draw::{DrawCmd, DrawData, DrawVert, TextureId},
@@ -187,7 +187,7 @@ impl State {
         }
         let _ = self
             .context
-            .update_display_metrics(restricted_gui::display::DisplayMetrics {
+            .update_display_metrics(tacita::display::DisplayMetrics {
                 physical_size: [(320. * scale) as u32, (160. * scale) as u32],
                 scale,
             });

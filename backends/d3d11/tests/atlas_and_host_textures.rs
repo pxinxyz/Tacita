@@ -1,9 +1,9 @@
-use restricted_gui::context::Context as GuiContext;
-use restricted_gui::draw::TextureId;
-use restricted_gui::input::InputState;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
-use restricted_gui_d3d11::{
+use tacita::context::Context as GuiContext;
+use tacita::draw::TextureId;
+use tacita::input::InputState;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
+use tacita_d3d11::{
     BackendError, Context as D3dContext, D3d11Backend, Device, OffscreenTarget,
 };
 

@@ -1,10 +1,10 @@
-use restricted_gui::animation::{
+use tacita::animation::{
     Easing, GradientOptions, GradientStop, Keyframe, MotionSettings, PlaybackMode, TimelineOptions,
 };
-use restricted_gui::context::Context;
-use restricted_gui::id::Id;
-use restricted_gui::input::InputState;
-use restricted_gui::ScrollFlags;
+use tacita::context::Context;
+use tacita::id::Id;
+use tacita::input::InputState;
+use tacita::ScrollFlags;
 
 fn context() -> Context {
     let mut ctx = Context::new(include_bytes!("assets/DejaVuSans.ttf")).unwrap();

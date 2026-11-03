@@ -1,5 +1,5 @@
 #![cfg(windows)]
-use restricted_gui_d3d11::{Context, D3d11Backend as Backend, OffscreenTarget, RenderTexture};
+use tacita_d3d11::{Context, D3d11Backend as Backend, OffscreenTarget, RenderTexture};
 struct Harness {
     backend: Backend,
     context: Context,
@@ -24,7 +24,7 @@ impl Harness {
     }
 }
 
-use restricted_gui::{
+use tacita::{
     draw::{DrawCmd, DrawData, DrawVert, TextureId},
     effects::{DrawEffects, MaskOp, MaskStack, SdfShape},
     rendering::{AlphaMode, ColorMode, DrawOptimization},

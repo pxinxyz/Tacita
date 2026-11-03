@@ -1,7 +1,7 @@
-use restricted_gui::context::Context;
-use restricted_gui::id::Id;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
+use tacita::context::Context;
+use tacita::id::Id;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
 
 pub const WINDOW_TITLE: &str = "inspector##demo";
 
@@ -17,7 +17,7 @@ pub struct InspectionSnapshot {
     pub captured: Option<Id>,
     pub windows: Vec<WindowStats>,
     pub clips: Vec<[f32; 4]>,
-    pub nodes: Vec<(restricted_gui::diagnostics::InspectionNode, String)>,
+    pub nodes: Vec<(tacita::diagnostics::InspectionNode, String)>,
 }
 
 impl InspectionSnapshot {

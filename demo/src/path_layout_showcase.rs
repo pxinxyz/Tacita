@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     layout::{
         ContentAlign, GridCell, LayoutAlign, LayoutItem, LayoutKind, LayoutOptions, LayoutSpec,
     },

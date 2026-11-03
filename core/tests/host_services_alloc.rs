@@ -1,4 +1,4 @@
-use restricted_gui::{context::Context, input::InputState, ScrollFlags};
+use tacita::{context::Context, input::InputState, ScrollFlags};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 struct Counting;
@@ -23,7 +23,7 @@ fn warmed_semantics_diagnostics_and_host_requests_allocate_nothing() {
     let mut c = Context::new(include_bytes!("assets/DejaVuSans.ttf")).unwrap();
     c.set_accessibility_enabled(true);
     c.set_duplicate_id_diagnostics(true);
-    c.set_hit_target_policy(restricted_gui::host_requests::HitTargetPolicy { minimum: [32.; 2] });
+    c.set_hit_target_policy(tacita::host_requests::HitTargetPolicy { minimum: [32.; 2] });
     let mut checked = false;
     let mut value = 5.;
     let mut text = String::from("text");

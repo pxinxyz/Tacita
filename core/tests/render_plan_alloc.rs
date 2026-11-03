@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     draw::{DrawCmd, DrawData, DrawVert, TextureId},
     rendering::{CommandPlan, DrawOptimization},
 };

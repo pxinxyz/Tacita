@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     editing::{TextEditOptions, TextEditor},
     font::{FontId, ShapedOptions, ShapedText, TextDirection},
     ui::Ui,

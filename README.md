@@ -29,25 +29,24 @@ The core uses `no_std` with `alloc`.
 ## Build and run
 
 The Windows build requires Rust, Microsoft C++ build tools, and the Windows SDK.
-Cargo package names retain the `restricted-gui` prefix.
 These commands run from the repository root.
 
 Cargo starts the wgpu demo:
 
 ```sh
-cargo run --locked -p restricted-gui-demo
+cargo run --locked -p tacita-demo
 ```
 
 Cargo starts the D3D11 example:
 
 ```sh
-cargo run --locked -p restricted-gui-d3d11 --example overlay_d3d11
+cargo run --locked -p tacita-d3d11 --example overlay_d3d11
 ```
 
 Cargo starts the D3D12 example:
 
 ```sh
-cargo run --locked -p restricted-gui-d3d12 --example overlay_d3d12
+cargo run --locked -p tacita-d3d12 --example overlay_d3d12
 ```
 
 ## Rust integration
@@ -58,7 +57,7 @@ The application creates `Gui` once with font bytes.
 This function declares controls inside an active frame:
 
 ```rust
-use restricted_gui_sdk::{Gui, ScrollFlags};
+use tacita_sdk::{Gui, ScrollFlags};
 
 fn settings(gui: &mut Gui, enabled: &mut bool) {
     gui.begin_window("Settings", ScrollFlags::NONE);
@@ -88,7 +87,7 @@ The [D3D12 example](backends/d3d12/examples/overlay_d3d12.rs) shows the equivale
 
 ## C and C++ integration
 
-The [C header](ffi/restricted_gui.h) defines the C interface.
+The [C header](ffi/tacita.h) defines the C interface.
 The C wrapper exposes context handles, control functions, and draw data.
 The C wrapper catches Rust panics at the C boundary.
 The application reads errors through `gui_last_error_code()`.
@@ -96,7 +95,7 @@ The application reads errors through `gui_last_error_code()`.
 Cargo builds the static library and dynamic library:
 
 ```sh
-cargo build --locked -p restricted-gui-ffi
+cargo build --locked -p tacita-ffi
 ```
 
 The [C++ smoke program](ffi/tests/smoke.cpp) shows context creation, control declarations, and draw data access.
@@ -136,7 +135,7 @@ The bare-metal build checks the `no_std` core and SDK:
 
 ```sh
 rustup target add x86_64-unknown-none
-cargo build --locked -p restricted-gui -p restricted-gui-sdk --target x86_64-unknown-none
+cargo build --locked -p tacita -p tacita-sdk --target x86_64-unknown-none
 ```
 
 Git Bash runs the C++ smoke check:

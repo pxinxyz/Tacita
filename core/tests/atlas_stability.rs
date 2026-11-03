@@ -1,7 +1,7 @@
-use restricted_gui::context::Context;
-use restricted_gui::input::InputState;
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
+use tacita::context::Context;
+use tacita::input::InputState;
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
 
 const DEJAVU_SANS: &[u8] = include_bytes!("assets/DejaVuSans.ttf");
 

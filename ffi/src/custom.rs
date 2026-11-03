@@ -1,4 +1,4 @@
-use restricted_gui::id::Id;
+use tacita::id::Id;
 
 use crate::{
     active_frame_ctx, gui_export, str_arg, GuiContext, GuiDragPayload, GuiErrorCode, GuiRect,

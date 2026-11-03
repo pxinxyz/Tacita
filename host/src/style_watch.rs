@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     context::Context,
     persistence::{decode_theme, StateError},
     theme::ThemeTokens,
@@ -93,12 +93,12 @@ impl StyleWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restricted_gui::persistence::encode_theme;
+    use tacita::persistence::encode_theme;
     #[test]
     fn edits_replacements_and_errors_keep_validated_state() {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
-            "restricted-style-{}-{}.theme",
+            "tacita-style-{}-{}.theme",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));

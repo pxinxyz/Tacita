@@ -1,4 +1,4 @@
-use restricted_gui::rendering::{AlphaMode, DrawOptimization};
+use tacita::rendering::{AlphaMode, DrawOptimization};
 
 pub const FRAMES_PER_CASE: u64 = 120;
 const CASES: usize = 8;

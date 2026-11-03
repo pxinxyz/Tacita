@@ -1,11 +1,11 @@
-use restricted_gui_sdk::{
+use tacita_sdk::{
     DataTableOptions, DataTableState, Gui, InputState, NumericEdit, ScrollFlags,
 };
 const FONT: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");
 
 #[test]
 fn flat_data_scopes_match_core_draw_data() {
-    let mut core = restricted_gui::context::Context::new(FONT).unwrap();
+    let mut core = tacita::context::Context::new(FONT).unwrap();
     let mut gui = Gui::new(FONT).unwrap();
     let input = InputState::default();
     core.set_input(input);
@@ -97,8 +97,8 @@ fn suppressed_data_widgets_preserve_host_models() {
 
 #[test]
 fn editor_forwards_match_core_and_suppression_preserves_models() {
-    use restricted_gui_sdk::{CurveEditor, GradientEditor, PlotOptions};
-    let mut core = restricted_gui::context::Context::new(FONT).unwrap();
+    use tacita_sdk::{CurveEditor, GradientEditor, PlotOptions};
+    let mut core = tacita::context::Context::new(FONT).unwrap();
     let mut gui = Gui::new(FONT).unwrap();
     let mut ca = CurveEditor::default();
     let mut cb = CurveEditor::default();

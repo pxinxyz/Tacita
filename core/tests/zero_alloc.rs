@@ -1,12 +1,12 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use restricted_gui::context::Context;
-use restricted_gui::draw::TextureId;
-use restricted_gui::font::FontId;
-use restricted_gui::input::{InputState, Key, KeyBinding, KeyEvent};
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
+use tacita::context::Context;
+use tacita::draw::TextureId;
+use tacita::font::FontId;
+use tacita::input::{InputState, Key, KeyBinding, KeyEvent};
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
 
 struct CountingAllocator;
 

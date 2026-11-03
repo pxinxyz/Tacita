@@ -1,5 +1,5 @@
-use restricted_gui_rhai_probe::Probe;
-use restricted_gui_sdk::{DrawCmd, DrawEffects, DrawVert, FontId, Gui, InputState, ScrollFlags};
+use tacita_rhai_probe::Probe;
+use tacita_sdk::{DrawCmd, DrawEffects, DrawVert, FontId, Gui, InputState, ScrollFlags};
 use rhai::Map;
 
 const FONT: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");

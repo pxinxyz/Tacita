@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     accessibility::{AccessibilityAction, AccessibilityNode},
     context::Context,
     id::Id,
@@ -94,7 +94,7 @@ pub fn apply_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restricted_gui::ScrollFlags;
+    use tacita::ScrollFlags;
     #[test]
     fn snapshot_hides_id_suffix_and_maps_screen_coordinates() {
         let mut ctx =
@@ -113,7 +113,7 @@ mod tests {
     }
     #[test]
     fn native_snapshot_keeps_nested_children_and_defers_actions() {
-        use restricted_gui::accessibility::{AccessibilityActionKind, AccessibilityRole};
+        use tacita::accessibility::{AccessibilityActionKind, AccessibilityRole};
         let mut ctx =
             Context::new(include_bytes!("../../../core/tests/assets/DejaVuSans.ttf")).unwrap();
         ctx.set_accessibility_enabled(true);

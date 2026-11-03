@@ -1,5 +1,5 @@
 #![cfg(windows)]
-use restricted_gui_d3d12::{D3d12Backend as Backend, OffscreenTarget, Queue, RenderTexture};
+use tacita_d3d12::{D3d12Backend as Backend, OffscreenTarget, Queue, RenderTexture};
 struct Harness {
     backend: Backend,
     queue: Queue,
@@ -28,7 +28,7 @@ impl Harness {
     }
 }
 
-use restricted_gui::{
+use tacita::{
     draw::{DrawCmd, DrawData, DrawVert, TextureId},
     effects::{DrawEffects, MaskOp, MaskStack, SdfShape},
     rendering::{AlphaMode, ColorMode, DrawOptimization},

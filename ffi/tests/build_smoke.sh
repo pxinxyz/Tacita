@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # build_smoke.sh — compiles ffi/tests/smoke.cpp (a real C++ consumer of
-# restricted_gui.h) against the restricted-gui-ffi staticlib and runs it.
+# tacita.h) against the tacita-ffi staticlib and runs it.
 #
 # Compiler probe order: MSVC cl.exe (located via vswhere) first, then
 # g++/clang++ — and a GNU branch is only taken when the GNU staticlib
-# artifact (librestricted_gui_ffi.a) actually exists: on the MSVC Rust
-# toolchain the artifact is restricted_gui_ffi.lib, so an installed g++
+# artifact (libtacita_ffi.a) actually exists: on the MSVC Rust
+# toolchain the artifact is tacita_ffi.lib, so an installed g++
 # must not win the probe and then fail on a file this workspace never
 # produces. The MSVC environment is set up manually (PATH/INCLUDE/LIB)
 # because vcvars64.bat is not reliable from every shell; the newest
@@ -18,14 +18,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 FONT="$ROOT/core/tests/assets/DejaVuSans.ttf"
 EXE="$HERE/smoke.exe"
-GNU_LIB="$ROOT/target/debug/librestricted_gui_ffi.a"
-MSVC_LIB="$ROOT/target/debug/restricted_gui_ffi.lib"
+GNU_LIB="$ROOT/target/debug/libtacita_ffi.a"
+MSVC_LIB="$ROOT/target/debug/tacita_ffi.lib"
 VSWHERE="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
 
 cleanup() { rm -f "$EXE" "$HERE/smoke.obj" "$HERE/smoke.o"; }
 trap cleanup EXIT
 
-cargo build -p restricted-gui-ffi --manifest-path "$ROOT/Cargo.toml"
+cargo build -p tacita-ffi --manifest-path "$ROOT/Cargo.toml"
 
 if [ -x "$VSWHERE" ] && [ -f "$MSVC_LIB" ]; then
     VS="$("$VSWHERE" -latest -products '*' \
@@ -44,7 +44,7 @@ if [ -x "$VSWHERE" ] && [ -f "$MSVC_LIB" ]; then
     export LIB="$MSVC_WIN\\lib\\x64;$SDK_WIN\\Lib\\$SDK_VER\\ucrt\\x64;$SDK_WIN\\Lib\\$SDK_VER\\um\\x64"
 
     (cd "$HERE" && cl //nologo //W4 //EHsc smoke.cpp \
-        ../../target/debug/restricted_gui_ffi.lib \
+        ../../target/debug/tacita_ffi.lib \
         ole32.lib oleaut32.lib oleacc.lib comctl32.lib kernel32.lib user32.lib ntdll.lib userenv.lib ws2_32.lib dbghelp.lib \
         //Fe:smoke.exe)
 elif command -v g++ >/dev/null 2>&1 && [ -f "$GNU_LIB" ]; then

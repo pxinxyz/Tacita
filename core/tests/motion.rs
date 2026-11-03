@@ -1,9 +1,9 @@
-use restricted_gui::animation::{Easing, MotionSettings};
-use restricted_gui::context::Context;
-use restricted_gui::id::Id;
-use restricted_gui::input::{InputState, Key, KeyEvent};
-use restricted_gui::ui::Ui;
-use restricted_gui::ScrollFlags;
+use tacita::animation::{Easing, MotionSettings};
+use tacita::context::Context;
+use tacita::id::Id;
+use tacita::input::{InputState, Key, KeyEvent};
+use tacita::ui::Ui;
+use tacita::ScrollFlags;
 
 const FONT: &[u8] = include_bytes!("assets/DejaVuSans.ttf");
 fn context() -> Context {

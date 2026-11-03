@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use restricted_gui::font::Font;
+use tacita::font::Font;
 
 const VALID_FONT: &[u8] = include_bytes!("../../core/tests/assets/DejaVuSans.ttf");
 

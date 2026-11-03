@@ -1,5 +1,5 @@
 use crate::{expect_resource, BackendError, D3d12Backend, Device};
-use restricted_gui::{
+use tacita::{
     draw::TextureId,
     effects::{FilterPlan, MAX_FILTER_PASSES},
 };
@@ -310,7 +310,7 @@ impl RenderTexture {
     pub fn render(
         &self,
         backend: &mut D3d12Backend,
-        draw: &restricted_gui::draw::DrawData,
+        draw: &tacita::draw::DrawData,
         clear: [f32; 4],
     ) -> Result<(), BackendError> {
         let aliases =

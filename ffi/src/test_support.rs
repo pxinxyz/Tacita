@@ -1,6 +1,6 @@
 use std::ptr;
 
-use restricted_gui::context::Context;
+use tacita::context::Context;
 
 use crate::{gui_context_new, gui_new_frame, gui_render, GuiContext, GuiInput, GuiKeyEvent};
 
@@ -69,7 +69,7 @@ pub(crate) fn center(rect: [f32; 4]) -> [f32; 2] {
 }
 
 pub(crate) struct Metrics {
-    font: restricted_gui::font::Font,
+    font: tacita::font::Font,
     pub line_height: f32,
     pub frame_padding: [f32; 2],
     pub window_padding: [f32; 2],
@@ -79,9 +79,9 @@ pub(crate) struct Metrics {
 impl Metrics {
     pub fn new() -> Self {
         let ctx = Context::new(DEJAVU_SANS).expect("reference context");
-        let font = restricted_gui::font::Font::new(
+        let font = tacita::font::Font::new(
             DEJAVU_SANS,
-            restricted_gui::context::DEFAULT_FONT_SIZE,
+            tacita::context::DEFAULT_FONT_SIZE,
         )
         .expect("DejaVu Sans must load");
         Self {

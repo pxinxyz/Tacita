@@ -2,7 +2,7 @@ use crate::{
     active_frame_ctx, gui_export, scroll_flags_from_bits, str_arg, ContainerKind, ContainerScope,
     GuiContext, GuiErrorCode, GuiVec2,
 };
-use restricted_gui::panels::{DockState, DockZone, SplitAxis};
+use tacita::panels::{DockState, DockZone, SplitAxis};
 
 #[repr(C)]
 #[derive(Clone, Copy)]

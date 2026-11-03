@@ -1,4 +1,4 @@
-use restricted_gui::{
+use tacita::{
     context::Context,
     editing::{TextEditOptions, TextEditor},
     font::{ShapedOptions, ShapedText, TextRasterMode},
@@ -30,9 +30,9 @@ fn warmed_unicode_editor_selection_and_display_allocate_nothing() {
     let emoji = c
         .add_font(include_bytes!("assets/Noto-COLRv1.ttf"), 16.)
         .unwrap();
-    c.set_font_fallback_chain(restricted_gui::font::FontId::DEFAULT, &[emoji])
+    c.set_font_fallback_chain(tacita::font::FontId::DEFAULT, &[emoji])
         .unwrap();
-    c.set_color_atlas_texture(Some(restricted_gui::draw::TextureId(90)))
+    c.set_color_atlas_texture(Some(tacita::draw::TextureId(90)))
         .unwrap();
     c.set_text_raster_mode(TextRasterMode::Subpixel);
     let mut e = TextEditor::new(

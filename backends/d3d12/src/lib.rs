@@ -1,7 +1,7 @@
 mod compositor;
 mod offscreen;
 pub use compositor::{BackdropCapture, PostProcessor, RenderTexture};
-pub use restricted_gui::rendering::{
+pub use tacita::rendering::{
     AlphaMode, ColorMode, DrawOptimization, RenderStats, TextureEncoding, UploadStrategy,
 };
 mod pipeline;
@@ -11,7 +11,7 @@ mod timing;
 
 use std::fmt;
 
-use restricted_gui::draw::{DrawData, TextureId};
+use tacita::draw::{DrawData, TextureId};
 use windows::Win32::Foundation::{CloseHandle, E_UNEXPECTED, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
@@ -336,7 +336,7 @@ impl D3d12Backend {
     }
     pub fn upload_color_font_atlas(
         &mut self,
-        font: &restricted_gui::font::Font,
+        font: &tacita::font::Font,
     ) -> Result<(), BackendError> {
         let Some(id) = font.color_atlas_texture() else {
             return Ok(());
