@@ -37,6 +37,25 @@ Cargo starts the wgpu demo:
 cargo run --locked -p tacita-demo
 ```
 
+The demo starts on the Overview page.
+The sidebar provides 14 pages.
+The search box filters the sidebar.
+The status bar reports measured frame and renderer data.
+
+The page option selects a page at startup:
+
+```sh
+cargo run --locked -p tacita-demo -- --page Controls
+```
+
+The capture option saves a PNG and closes the demo:
+
+```sh
+cargo run --locked -p tacita-demo -- --page Overview --capture overview.png
+```
+
+The native accessibility bridge requires the `--native-accessibility` option.
+
 Cargo starts the D3D11 example:
 
 ```sh

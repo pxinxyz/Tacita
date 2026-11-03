@@ -174,7 +174,7 @@ pub(super) fn paths(ui: &mut Ui<'_>, state: &mut State, theme: Style) {
         ui.draw_concave_polygon(&star, [125, 207, 255, 255])
             .unwrap();
     });
-    ui.label("AA follows Settings > anti-aliasing. Compare at your monitor DPI.");
+    ui.label("Change shape antialiasing on the Appearance page. Compare at your monitor DPI.");
     if ui.button("Try invalid bow-tie (draws nothing)") {
         let rejected = ui.draw_concave_polygon(
             &[[0.0, 0.0], [40.0, 40.0], [0.0, 40.0], [40.0, 0.0]],

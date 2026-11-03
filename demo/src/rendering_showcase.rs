@@ -1,10 +1,10 @@
 use crate::{renderer::Renderer, shader_watch::ShaderWatcher};
+use std::{path::PathBuf, time::Duration};
 use tacita::{
     draw::TextureId,
     rendering::{AlphaMode, DrawOptimization},
     ui::Ui,
 };
-use std::{path::PathBuf, time::Duration};
 
 const STRAIGHT: TextureId = TextureId(66);
 const ASSOCIATED: TextureId = TextureId(67);
@@ -201,7 +201,7 @@ impl State {
             [rect[0] + 307.7, rect[1] + 49.6],
         ];
         ui.draw_polygon_filled(&points, [125, 207, 255, 230]);
-        ui.label("Triangle edge: compare 1x and 4x; disable Canvas AA to isolate MSAA.");
+        ui.label("Compare 1x and 4x samples. Disable shape antialiasing on the Appearance page to isolate MSAA.");
         if ui.button("Reload built-in shader") {
             self.reload = Some(0);
         }

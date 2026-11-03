@@ -64,12 +64,10 @@ impl State {
             &mut self.large_targets,
         );
         ui.checkbox("Native widget cursors", &mut self.native_cursor);
-        ui.checkbox(
-            "Idle host preview (replaces the animated gallery)",
-            &mut self.idle,
-        );
+        ui.checkbox("Idle redraw mode", &mut self.idle);
+        ui.tooltip_text("Limits redraws while this page stays open.");
         ui.checkbox("Deliberate duplicate IDs", &mut self.duplicates);
-        ui.label("High contrast is available in Settings > Theme.");
+        ui.label("Select High contrast on the Appearance page.");
         ui.separator();
         ui.pill_toggle("Accessible toggle", &mut self.checked);
         if ui.button("Accessible action") {
@@ -93,7 +91,7 @@ impl State {
             "core next wake {:?} / {}",
             self.wake, self.bridge_status
         ));
-        ui.label("Idle: core sleeps when settled; title clock wakes once per second.");
+        ui.label("Idle mode follows core redraw requests and updates the status once per second.");
         ui.label("The semantic preview below is capped at 128 nodes, not the provider tree.");
         self.preview_root = Some(ui.widget_id("semantic tree"));
         let preview_width = ui.available_width().max(160.);

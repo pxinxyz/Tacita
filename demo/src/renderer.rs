@@ -1,7 +1,5 @@
-use tacita::rendering::{
-    AlphaMode, CommandPlan, DrawCalls, DrawOptimization, GeometryRange,
-};
 use std::sync::Arc;
+use tacita::rendering::{AlphaMode, CommandPlan, DrawCalls, DrawOptimization, GeometryRange};
 #[path = "renderer_options.rs"]
 mod renderer_options;
 use renderer_options::RasterBundle;
@@ -28,6 +26,7 @@ struct RenderTarget {
 }
 
 pub struct Renderer {
+    capture_path: Option<std::path::PathBuf>,
     frame_progress: crate::frame_watchdog::Progress,
     optimization: DrawOptimization,
     plan: CommandPlan,
@@ -140,7 +139,8 @@ impl Renderer {
             .unwrap_or(&caps.formats[0]);
         eprintln!("[demo] surface format: {format:?}");
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | (caps.usages & wgpu::TextureUsages::COPY_SRC),
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
@@ -290,6 +290,7 @@ impl Renderer {
         });
 
         Ok(Renderer {
+            capture_path: None,
             frame_progress: crate::frame_watchdog::Progress::default(),
             instance,
             window,
@@ -349,6 +350,10 @@ impl Renderer {
             targets: Vec::new(),
             preview_aliases: Vec::new(),
         })
+    }
+
+    pub fn capture_next_frame(&mut self, path: std::path::PathBuf) {
+        self.capture_path = Some(path);
     }
 
     pub fn stats(&mut self) -> tacita::rendering::RenderStats {
@@ -804,13 +809,21 @@ impl Renderer {
             (w * h * 4) as usize,
             "host texture data must be w*h*4 RGBA bytes"
         );
-        assert_eq!(
-            w % 64,
-            0,
-            "host texture width {w} must be a multiple of 64 px: the upload \
-             does no row padding, so 4*w must satisfy write_texture's \
-             256-byte row alignment"
-        );
+        let row_bytes = (w * 4) as usize;
+        let stride = row_bytes.div_ceil(256) * 256;
+        let mut padded = Vec::new();
+        let upload = if stride == row_bytes {
+            rgba
+        } else {
+            padded.resize(stride * h as usize, 0);
+            for (source, destination) in rgba
+                .chunks_exact(row_bytes)
+                .zip(padded.chunks_exact_mut(stride))
+            {
+                destination[..row_bytes].copy_from_slice(source);
+            }
+            &padded
+        };
         let texture = create_rgba_texture(&self.device, "gui host texture", w, h);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -819,10 +832,10 @@ impl Renderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba,
+            upload,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * w),
+                bytes_per_row: Some(stride as u32),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -1209,12 +1222,30 @@ impl Renderer {
                 );
             }
         }
+        let capture = self.capture_path.take().and_then(|path| {
+            if self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+                Some(crate::capture::FrameCapture::encode(
+                    &self.device,
+                    &mut encoder,
+                    &surface_texture.texture,
+                    path,
+                ))
+            } else {
+                eprintln!("[capture] the surface does not support readback");
+                None
+            }
+        });
         if let (Some(timer), Some((index, _))) = (&self.timer, &timing) {
             timer.resolve(&mut encoder, *index);
         }
         self.frame_progress
             .mark(crate::frame_watchdog::Stage::Submit);
         self.queue.submit([encoder.finish()]);
+        if let Some(capture) = capture {
+            if let Err(error) = capture.write(&self.device) {
+                eprintln!("[capture] {error}");
+            }
+        }
         if let (Some(timer), Some((index, _))) = (&self.timer, &timing) {
             timer.map(*index);
         }

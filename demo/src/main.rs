@@ -1,5 +1,6 @@
 #[path = "../../host/src/accessibility/mod.rs"]
 pub mod accessibility_host;
+mod capture;
 mod chrome;
 #[path = "../../host/src/clipboard.rs"]
 mod clipboard;
@@ -7,6 +8,7 @@ mod cursor;
 mod data_showcase;
 mod effects_renderer;
 mod frame_watchdog;
+mod gallery;
 mod gpu_timing;
 mod host_services_showcase;
 mod input_state_showcase;
@@ -29,15 +31,13 @@ mod text_editing_showcase;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrome::{ChromeMesh, Hit};
+use chrome::ChromeMesh;
 use cursor::OrbitalCursor;
 use inspector::InspectionSnapshot;
 use renderer::Renderer;
 
 use tacita::animation::{pulse, Easing, MotionSettings};
-use tacita::animation::{
-    GradientOptions, GradientStop, Keyframe, PlaybackMode, TimelineOptions,
-};
+use tacita::animation::{GradientOptions, GradientStop, Keyframe, PlaybackMode, TimelineOptions};
 use tacita::context::Context;
 use tacita::draw::TextureId;
 use tacita::font::{FontId, FontInfo, IconFont};
@@ -65,6 +65,7 @@ const COLOR_FONT_TEXTURE: TextureId = TextureId(90);
 const ICON_RANGE: (u32, u32) = (icon::STAR as u32, icon::TRIANGLE_EXCLAMATION as u32);
 
 struct DemoState {
+    gallery: gallery::State,
     host_services: host_services_showcase::State,
     input_state: input_state_showcase::State,
     enabled: bool,
@@ -105,12 +106,6 @@ struct DemoState {
     limit_fps: bool,
     fps_limit: i32,
     routing_child_scrollable: bool,
-    sandbox_clicks: u32,
-    sandbox_check: bool,
-    sandbox_slider: f32,
-    reopen_main: bool,
-    reopen_sandbox: bool,
-    reopen_routing: bool,
     inspect: bool,
     drag_payload_value: u32,
     last_drop_value: Option<u32>,
@@ -147,9 +142,12 @@ struct DemoState {
 
 impl DemoState {
     fn new() -> Self {
-        let theme = ThemeTokens::from_style(tokyo_night_style());
+        let theme = ThemeTokens::from_style(tacita_style());
+        let mut host_services = host_services_showcase::State::default();
+        host_services.native_cursor = true;
         DemoState {
-            host_services: Default::default(),
+            gallery: gallery::State::default(),
+            host_services,
             input_state: input_state_showcase::State::default(),
             enabled: true,
             speed: 25.0,
@@ -162,7 +160,7 @@ impl DemoState {
             pill_enabled: false,
             segmented_choice: 0,
             nested_enabled: false,
-            text: String::from("héllo wörld — edit me!"),
+            text: String::from("Edit this text."),
             fps_text: String::new(),
             toggle: false,
             anti_aliasing: true,
@@ -190,14 +188,8 @@ impl DemoState {
             font_status: String::new(),
             style: Style::default(),
             limit_fps: true,
-            fps_limit: 144,
+            fps_limit: 60,
             routing_child_scrollable: false,
-            sandbox_clicks: 0,
-            sandbox_check: false,
-            sandbox_slider: 0.5,
-            reopen_main: false,
-            reopen_sandbox: false,
-            reopen_routing: false,
             inspect: false,
             drag_payload_value: 1,
             last_drop_value: None,
@@ -293,25 +285,11 @@ impl DemoState {
     }
 }
 
-const THEME_NAMES: [&str; 4] = ["Tokyo Night", "Default dark", "nightfall", "high contrast"];
+const THEME_NAMES: [&str; 4] = ["Tacita", "Graphite", "Nightfall", "High contrast"];
 
-fn tokyo_night_style() -> Style {
-    Style {
-        window_bg: [36, 40, 59, 255],
-        title_bg: [26, 27, 38, 255],
-        title_text: [192, 202, 245, 255],
-        widget_bg: [65, 72, 104, 255],
-        widget_bg_hovered: [122, 162, 247, 255],
-        widget_bg_active: [75, 88, 149, 255],
-        text: [218, 224, 245, 255],
-        scrollbar_bg: [31, 35, 53, 255],
-        scrollbar_thumb: [65, 72, 104, 255],
-        scrollbar_thumb_hovered: [86, 95, 137, 255],
-        scrollbar_thumb_active: [122, 162, 247, 255],
-        ..Default::default()
-    }
+fn tacita_style() -> Style {
+    gallery::style()
 }
-
 fn nightfall_style() -> Style {
     Style {
         window_bg: [0x0E, 0x10, 0x15, 255],
@@ -349,11 +327,7 @@ const FONT_SAMPLE_TEXT: &str = "The quick brown fox jumps over the lazy dog 0123
 
 const ATLAS_PREVIEW_WIDTH: f32 = 280.0;
 
-const LOG_LINES: usize = 30;
-
-const MAIN_WINDOW_TITLE: &str = "components##demo";
-const SANDBOX_WINDOW_TITLE: &str = "interaction##demo";
-const ROUTING_WINDOW_TITLE: &str = "scroll routing##demo";
+const MAIN_WINDOW_TITLE: &str = "Tacita##gallery";
 
 const ROUTING_CHILD_SIZE: [f32; 2] = [180.0, 136.0];
 
@@ -362,24 +336,10 @@ const ROUTING_CHILD_ROWS: usize = 20;
 const ROUTING_FILLER_ROWS: usize = 16;
 
 fn window_manager(ui: &mut Ui<'_>, state: &mut DemoState) {
-    ui.label("Panels");
-    if ui.button("Components") {
-        state.reopen_main = true;
+    if ui.button("Back to overview") {
+        state.gallery.page = 0;
     }
-    ui.same_line();
-    if ui.button("Interaction") {
-        state.reopen_sandbox = true;
-    }
-    ui.same_line();
-    if ui.button("Scroll routing") {
-        state.reopen_routing = true;
-    }
-    ui.tooltip_text(
-        "Reopens a window closed via its title-bar ×.\nIf all three are closed, restart the demo.",
-    );
-    ui.checkbox("Inspect frame", &mut state.inspect);
 }
-
 fn routing_child_content(ui: &mut Ui<'_>, tag: &str) {
     for i in 1..=ROUTING_CHILD_ROWS {
         ui.label(&format!("{tag} {i:02}"));
@@ -451,6 +411,28 @@ fn test_pattern_pixels() -> Vec<u8> {
         }
     }
     px
+}
+
+fn banner_pixels() -> (Vec<u8>, u32, u32) {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!("../../banner.png")));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().expect("bundled banner metadata");
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut pixels)
+        .expect("bundled banner pixels");
+    pixels.truncate(info.buffer_size());
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => pixels,
+        png::ColorType::Rgb => pixels
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        _ => panic!("the bundled banner must use RGB or RGBA"),
+    };
+    (rgba, info.width, info.height)
 }
 
 fn alpha_mask_pixels() -> Vec<u8> {
@@ -525,7 +507,7 @@ fn toggle_square(ui: &mut Ui<'_>, label: &str, value: &mut bool) -> bool {
 fn canvas_showcase(ui: &mut Ui<'_>, state: &mut DemoState, time: f32, window_pad_x: f32) {
     ui.checkbox("Anti-aliasing", &mut state.anti_aliasing);
     ui.label("on: circles = coverage masks, others = fringe · off: crisp");
-    ui.label("Custom widget (.docs/custom-widgets.md):");
+    ui.label("Custom widget");
     toggle_square(ui, "canvas toggle##demo", &mut state.toggle);
     ui.label("Canvas primitives — one row per group:");
 
@@ -611,23 +593,6 @@ fn canvas_showcase(ui: &mut Ui<'_>, state: &mut DemoState, time: f32, window_pad
     ui.draw_circle_filled([window_left, cy + 32.0], 24.0, [240, 220, 80, 255]);
     ui.label("image / filled rect: inspect the corners");
     ui.label("half outside window = clip test");
-}
-
-fn gallery_live_preview(ui: &mut Ui<'_>, size: [f32; 2], time: f32, accent: [u8; 4]) {
-    ui.preview_canvas("live preview##gallery", size, |ui, canvas| {
-        let center = [(canvas[0] + canvas[2]) * 0.5, (canvas[1] + canvas[3]) * 0.5];
-        let radius = ((canvas[3] - canvas[1]) * 0.5 - 12.0).min(84.0);
-        ui.draw_circle_outline(center, radius, [70, 82, 127, 255], 1.5);
-        ui.draw_arc(
-            center,
-            radius,
-            time * 0.7..=time * 0.7 + 2.1,
-            [122, 162, 247, 255],
-            3.5,
-        );
-        ui.draw_circle_filled(center, 18.0 + (time * 1.6).sin() * 3.0, accent);
-        ui.draw_circle_outline(center, 25.0, [192, 202, 245, 255], 1.5);
-    });
 }
 
 fn text_showcase(
@@ -1055,14 +1020,10 @@ fn fonts_panel(
             ui.label(FONT_SAMPLE_TEXT);
         });
     }
-    if ui.combo("UI font", &UI_FONT_NAMES, &mut state.ui_font) {
+    if ui.combo("Preview font", &UI_FONT_NAMES, &mut state.ui_font) {
         eprintln!("[demo] ui font -> {}", UI_FONT_NAMES[state.ui_font]);
     }
-    ui.tooltip_text(
-        "Font scopes: a non-default selection wraps the\n\
-         whole frame's windows in push_font/pop_font.\n\
-         Applied at the top of the next frame.",
-    );
+    ui.tooltip_text("Selects the font for the sample above.");
     ui.text_input("Font file", &mut state.font_path);
     ui.tooltip_text("Path to a .ttf/.otf for the host to register.");
     ui.slider_int("Font px size", &mut state.font_px, 8..=64);
@@ -1104,6 +1065,7 @@ fn fonts_panel(
 }
 
 struct App {
+    capture_output: Option<std::path::PathBuf>,
     watchdog: frame_watchdog::FrameWatchdog,
     renderer_smoke: bool,
     #[cfg(windows)]
@@ -1154,7 +1116,7 @@ impl App {
             layout_showcase::register_icons(|source, size| ctx.add_svg_icon(source, size))
                 .expect("valid built-in SVG icons fit the atlas");
         let themes = [
-            tokyo_night_style(),
+            tacita_style(),
             Style::default(),
             nightfall_style(),
             ThemeTokens::high_contrast().resolve(),
@@ -1162,6 +1124,14 @@ impl App {
         ctx.set_accessibility_enabled(true);
         ctx.set_duplicate_id_diagnostics(true);
         let mut state = DemoState::new();
+        let args: Vec<_> = std::env::args().collect();
+        if let Some(page) = args.windows(2).find(|a| a[0] == "--page") {
+            state.gallery.page = gallery::page_index(&page[1]).expect("unknown gallery page");
+        }
+        let capture_output = args
+            .windows(2)
+            .find(|a| a[0] == "--capture")
+            .map(|a| std::path::PathBuf::from(&a[1]));
         state.style = themes[0];
         ctx.style = state.style;
         let fallback = ctx
@@ -1190,6 +1160,7 @@ impl App {
         warm_up_shapes(&mut ctx, [1350.0, 800.0], fallback);
         let renderer_smoke = std::env::args().any(|arg| arg == "--renderer-smoke");
         App {
+            capture_output,
             watchdog: frame_watchdog::FrameWatchdog::new(
                 renderer_smoke || std::env::var_os("TACITA_WATCHDOG").is_some(),
             ),
@@ -1264,52 +1235,6 @@ impl App {
         self.state.limit_fps
     }
 
-    fn arrange_startup_windows(&mut self) {
-        let [width, height] = self.viewport_size;
-        if width >= 1100.0 && height >= 650.0 {
-            let margin = 56.0;
-            let top = chrome::BAR_HEIGHT + 36.0;
-            let gap = 24.0;
-            let right_width = 440.0;
-            let main_width = width - 2.0 * margin - gap - right_width;
-            let full_height = height - top - margin;
-            let right_x = margin + main_width + gap;
-            let sandbox_height = 250.0;
-            self.ctx
-                .set_window_rect(MAIN_WINDOW_TITLE, [margin, top], [main_width, full_height]);
-            self.ctx.set_window_rect(
-                SANDBOX_WINDOW_TITLE,
-                [right_x, top],
-                [right_width, sandbox_height],
-            );
-            self.ctx.set_window_rect(
-                ROUTING_WINDOW_TITLE,
-                [right_x, top + sandbox_height + 20.0],
-                [right_width, full_height - sandbox_height - 20.0],
-            );
-        } else {
-            let margin = 24.0;
-            let top = chrome::BAR_HEIGHT + 24.0;
-            self.ctx.set_window_rect(
-                MAIN_WINDOW_TITLE,
-                [margin, top],
-                [width - 2.0 * margin, height - top - margin],
-            );
-            self.ctx.set_window_rect(
-                SANDBOX_WINDOW_TITLE,
-                [margin + 20.0, top + 20.0],
-                [400.0, 300.0],
-            );
-            self.ctx.set_window_rect(
-                ROUTING_WINDOW_TITLE,
-                [margin + 40.0, top + 40.0],
-                [400.0, 340.0],
-            );
-            self.ctx.set_window_open(SANDBOX_WINDOW_TITLE, false);
-            self.ctx.set_window_open(ROUTING_WINDOW_TITLE, false);
-        }
-    }
-
     fn frame(&mut self) {
         self.watchdog.progress.frame(self.frame_count + 1);
         self.watchdog.progress.mark(frame_watchdog::Stage::Settings);
@@ -1382,21 +1307,15 @@ impl App {
             self.fps_measure_start = now;
             self.fps_measure_frames = 0;
         }
-        let display = self.display_refresh_millihertz.map_or_else(
-            || "display unknown".to_string(),
-            |mhz| format!("display {:.1}", mhz as f32 / 1000.0),
+        let refresh = self
+            .display_refresh_millihertz
+            .map_or_else(String::new, |value| {
+                format!("    display {:.0} Hz", value as f32 / 1000.)
+            });
+        self.state.fps_text = format!(
+            "{:.0} FPS    {:.2} ms frame interval{}",
+            self.measured_fps, self.measured_ms, refresh
         );
-        self.state.fps_text = if self.state.limit_fps {
-            format!(
-                "FPS: {:.1}  ({:.2} ms)  /  target {}  /  {display}",
-                self.measured_fps, self.measured_ms, self.state.fps_limit
-            )
-        } else {
-            format!(
-                "FPS: {:.1}  ({:.2} ms)  /  uncapped  /  {display}",
-                self.measured_fps, self.measured_ms
-            )
-        };
         self.time += dt;
 
         if self.state.pending_font_load {
@@ -1511,6 +1430,7 @@ impl App {
         self.keys.clear();
         self.wheel = 0.0;
 
+        gallery::prepare(&mut self.ctx, self.viewport_size);
         self.ctx.new_frame(dt);
         let window_pad_x = self.ctx.style.window_padding[0];
         let text_density = self.ctx.font().raster_scale();
@@ -1528,395 +1448,39 @@ impl App {
         let ui_font_face = self.ui_font_faces[self.state.ui_font];
         {
             let mut ui = self.ctx.ui();
-            if let Some(face) = ui_font_face {
-                ui.push_font(face);
-            }
             let state = &mut self.state;
-            let svg_icons = self.svg_icons;
-            let time = self.time;
             self.watchdog.progress.mark(frame_watchdog::Stage::Widgets);
-            if self.renderer_smoke {
-                ui.window(MAIN_WINDOW_TITLE, ScrollFlags::BAR, |ui| {
-                    canvas_showcase(ui, state, time, window_pad_x);
+            ui.window(MAIN_WINDOW_TITLE, ScrollFlags::NONE, |ui| {
+                if self.renderer_smoke {
+                    canvas_showcase(ui, state, self.time, window_pad_x);
                     state
                         .render_preview
                         .draw(ui, render_stats, timing_supported);
-                });
-            } else if state.host_services.idle {
-                ui.window(MAIN_WINDOW_TITLE, ScrollFlags::BAR, |ui| {
-                    state.host_services.draw(ui)
-                });
-            } else {
-                ui.window(MAIN_WINDOW_TITLE, ScrollFlags::BAR, |ui| {
-                window_manager(ui, state);
-                ui.tab_bar("tabs##demo", |bar| {
-                    bar.tab("Widgets", |ui| {
-                        ui.label(&state.fps_text);
-                        ui.checkbox("Enable feature", &mut state.enabled);
-                        ui.tooltip_text("Switch off to fade and disable the controls in the form group below.");
-                        ui.slider_float("Speed", &mut state.speed, 0.0..=100.0);
-                        ui.tooltip_text("Drag the handle, or click to jump to a position.");
-                        ui.slider_int("Count", &mut state.count, 0..=50);
-                        ui.filled_slider_float("Filled speed", &mut state.speed, 0.0..=100.0);
-                        ui.filled_slider_int("Filled count", &mut state.count, 0..=50);
-                        ui.range_slider_float("Float range", &mut state.range_float_lower,
-                            &mut state.range_float_upper, 0.0..=100.0);
-                        ui.range_slider_int("Integer range", &mut state.range_int_lower,
-                            &mut state.range_int_upper, 0..=50);
-                        ui.drag_float("Drag speed", &mut state.speed, 0.2, 0.0..=100.0);
-                        ui.drag_int("Drag count", &mut state.count, 0.15, 0..=50);
-                        ui.label("Radio choice:");
-                        ui.radio_button("Quiet", &mut state.radio_choice, 0);
-                        ui.same_line();
-                        ui.radio_button("Balanced", &mut state.radio_choice, 1);
-                        ui.same_line();
-                        ui.radio_button("Bright", &mut state.radio_choice, 2);
-                        ui.pill_toggle("Pill toggle", &mut state.pill_enabled);
-                        ui.segmented_control("Mode", &["Quiet", "Balanced", "Bright"],
-                            &mut state.segmented_choice);
-                        ui.progress_bar("Speed progress", state.speed / 100.0, [240.0, 22.0]);
-                        ui.spinner("Loading slow", 18.0, time * 2.0);
-                        ui.same_line();
-                        ui.spinner("Loading fast", 30.0, time * 5.0);
-                        ui.tree_node("Nested controls", |ui| {
-                            ui.label("Content is declared only while open.");
-                            ui.checkbox("Nested enabled", &mut state.nested_enabled);
-                        });
-                        ui.separator();
-                        ui.label("Compact controls:");
-                        if ui.icon_button(&format!("{}##compact-settings", icon::GEAR), 26.0) {
-                            eprintln!("[demo] compact icon button clicked");
-                        }
-                        ui.same_line();
-                        ui.status_badge("hook active", [0x00, 0xE5, 0x99, 255]);
-                        ui.same_line();
-                        ui.hotkey_hint("M4");
-                        ui.color_swatch("Accent", state.style.widget_bg_active, [22.0, 22.0]);
-                        if ui.button("Reset") {
-                            state.reset();
-                        }
-                        ui.tooltip_text("Restores the widget defaults (text is kept).");
-                        if ui.button(&format!("{} Apply", icon::CHECK)) {
-                            eprintln!(
-                                "[demo] Apply: enabled={} speed={:.2} count={} text={:?}",
-                                state.enabled, state.speed, state.count, state.text
-                            );
-                        }
-                        ui.same_line();
-                        if ui.button("Clear text") {
-                            state.text.clear();
-                        }
-                        ui.text_input("Text", &mut state.text);
-                        ui.validation_message(if state.text.trim().is_empty() { ValidationState::Error } else { ValidationState::Success },
-                            if state.text.trim().is_empty() { "Text is required" } else { "Text is ready" });
-                        ui.tooltip_text(
-                            "UTF-8-safe editing. While this input is focused,\ntooltips UI-wide are muted (the gated-hover rule).",
-                        );
-                        ui.label(&format!(
-                            "{} {} {} {}  Font Awesome icons, inline with text",
-                            icon::STAR, icon::GEAR, icon::HOME, icon::EYE
-                        ));
-                        ui.tooltip_text(
-                            "Icon fonts: the PUA range covering the curated\n\
-                             icon::* constants was baked into the same atlas at\n\
-                             init (Context::new_with_icons) — icons measure,\n\
-                             lay out, and recolor exactly like text glyphs.",
-                        );
-                        ui.allocate([1.0, 8.0]);
-                        ui.label("Form and navigation:");
-                        ui.search_box("Filter##standalone", &mut state.standalone_query);
-                        ui.validation_message(if state.standalone_query.len() > 24 { ValidationState::Warning } else { ValidationState::Success },
-                            if state.standalone_query.len() > 24 { "Long search query" } else { "Search query accepted" });
-                        ui.breadcrumbs("Demo path", &["home", "widgets", "forms"], &mut state.breadcrumb_choice);
-                        ui.group_box("Navigation", [280.0, 156.0], |ui| {
-                            ui.nav_row("Overview", &mut state.nav_choice, 0);
-                            ui.nav_row("Controls", &mut state.nav_choice, 1);
-                            ui.nav_row("Preview", &mut state.nav_choice, 2);
-                        });
-                        ui.group_box("Disabled form", [280.0, 140.0], |ui| {
-                            ui.disabled("form content", !state.enabled, |ui| {
-                                ui.checkbox("Nested enabled", &mut state.nested_enabled);
-                                ui.slider_float("Nested speed", &mut state.speed, 0.0..=100.0);
-                            });
-                        });
-                        ui.label("Overlays: popup, right-click menu, modal, toast");
-                        let popup_id = ui.widget_id("demo popup");
-                        if ui.button("Open popup") { ui.open_popup(popup_id); }
-                        ui.same_line();
-                        if ui.button("Open modal") {
-                            let modal_id = ui.widget_id("demo modal");
-                            ui.open_modal(modal_id);
-                        }
-                        ui.same_line();
-                        if ui.button("Show toast") { ui.toast("Settings saved", 3.0); }
-                        if ui.begin_popup(popup_id, [480.0, 220.0, 750.0, 350.0]) {
-                            ui.label("General popup content");
-                            ui.checkbox("Popup checkbox", &mut state.nested_enabled);
-                            if ui.button("Close popup") { ui.close_popup(); }
-                            ui.end_popup();
-                        }
-                        let menu_target = ui.allocate([260.0, 30.0]);
-                        ui.draw_rect_filled([menu_target[0], menu_target[1]], [menu_target[2], menu_target[3]], state.style.widget_bg);
-                        ui.draw_text_at([menu_target[0] + 8.0, menu_target[1] + 5.0], "Right-click this row", state.style.text);
-                        let menu_id = ui.widget_id("demo context menu");
-                        if ui.begin_context_menu(menu_id, menu_target, [180.0, 110.0]) {
-                            if ui.button("Show toast") { ui.toast("Context action", 3.0); ui.close_popup(); }
-                            if ui.button("Close") { ui.close_popup(); }
-                            ui.end_popup();
-                        }
-                        let modal_id = ui.widget_id("demo modal");
-                        if ui.begin_modal(modal_id, [460.0, 235.0, 890.0, 445.0]) {
-                            ui.label("Modal dialog: background controls are blocked");
-                            ui.checkbox("Confirm option", &mut state.nested_enabled);
-                            if ui.button("Dismiss") { ui.close_popup(); }
-                            ui.end_popup();
-                        }
-                        ui.label("Focus, drag and scrollbar skin:");
-                        interaction_showcase(ui, state);
-                        ui.label("Log (scroll region):");
-                        let [line_w, line_h] =
-                            ui.measure_text("log line 30: the quick brown fox");
-                        let row_h = line_h + state.style.item_spacing[1];
-                        let log_size = [
-                            (line_w + 12.0).min(560.0),
-                            13.0 * row_h - state.style.item_spacing[1] + 4.0,
-                        ];
-                        ui.scroll_region("log##demo", log_size, |ui| {
-                            for i in 1..=LOG_LINES {
-                                ui.label(&format!("log line {i:02}: the quick brown fox"));
-                            }
-                        });
-                        ui.tooltip_text(
-                            "Wheel over the region scrolls it (3 lines per notch);\n\
-                             content scrolled past the fold is clipped and can\n\
-                             neither hover nor be pressed.",
-                        );
-                        let preview_width = (ui.available_width()
-                            - log_size[0]
-                            - state.style.item_spacing[0])
-                            .min(440.0);
-                        if preview_width >= 240.0 {
-                            ui.same_line();
-                            gallery_live_preview(
-                                ui,
-                                [preview_width, log_size[1]],
-                                time,
-                                state.circle_color,
-                            );
-                        }
-                    });
-                    bar.tab("Panels", |ui| {
-                        ui.label("Table: ordinary controls in clipped cells");
-                        let table = ui.begin_table("table##demo", [400.0, 130.0], 3, 2);
-                        for row in 0..2 {
-                            for column in 0..3 {
-                                let cell = ui.begin_table_cell(&table, row, column);
-                                ui.label(&format!("row {row}, col {column}"));
-                                ui.checkbox(&format!("cell {row}-{column}"), &mut state.nested_enabled);
-                                ui.end_panel_cell(cell);
-                            }
-                        }
-                        ui.end_table(table);
-
-                        ui.label("Split: drag the vertical divider");
-                        let split = ui.begin_split("split##demo", [400.0, 120.0], SplitAxis::Horizontal, &mut state.split_ratio);
-                        let left = ui.begin_split_pane(&split, 0);
-                        ui.label("left pane");
-                        ui.button("Left action");
-                        ui.end_panel_cell(left);
-                        let right = ui.begin_split_pane(&split, 1);
-                        ui.label("right pane");
-                        ui.button("Right action");
-                        ui.end_panel_cell(right);
-                        ui.end_split(split);
-
-                        ui.label("Resizable child: drag its bottom-right grip");
-                        let child = ui.begin_resizable_child("resizable##demo", &mut state.child_size, [170.0, 80.0], ScrollFlags::NONE);
-                        ui.label("Caller-owned size");
-                        ui.checkbox("Panel toggle", &mut state.nested_enabled);
-                        ui.end_resizable_child(child);
-
-                        ui.label("Dockspace: drag panel headers; release near an edge to dock");
-                        let mut dock = ui.begin_dockspace("dockspace##demo", [400.0, 220.0]);
-                        let left = ui.begin_dock_panel(&mut dock, "Inspector##dock-a", [185.0, 125.0], &mut state.dock_left);
-                        ui.label("Dock or float me");
-                        ui.button("Inspect");
-                        ui.end_dock_panel(left);
-                        let right = ui.begin_dock_panel(&mut dock, "Layers##dock-b", [185.0, 125.0], &mut state.dock_right);
-                        ui.label("Independent placement");
-                        ui.checkbox("Visible", &mut state.nested_enabled);
-                        ui.end_dock_panel(right);
-                        ui.end_dockspace(dock);
-                    });
-                    bar.tab("Host",|ui|state.host_services.draw(ui));
-                    bar.tab("Data", |ui| state.data.draw(ui));
-                    bar.tab("Canvas", |ui| {
-                        canvas_showcase(ui, state, time, window_pad_x);
-                    });
-                    bar.tab("Paths", |ui| {
-                        path_layout_showcase::paths(ui, &mut state.path_layout, state.style);
-                    });
-                    bar.tab("Motion", |ui| {
-                        motion_showcase(ui, state, time);
-                    });
-                    bar.tab("Text", |ui| {
-                        state.text_editing.draw(ui);
-                        layout_showcase::icons(ui, &svg_icons, state.style.widget_bg_active);
-                        text_showcase(ui, state, &face_infos, time, text_density);
-                    });
-                    bar.tab("Layout", |ui| {
-                        path_layout_showcase::layouts(ui, &mut state.path_layout, state.style);
-                        ui.separator();
-                        layout_showcase::show(ui, state, &face_infos);
-                    });
-                    bar.tab("Shapes", |ui| {
-                        shapes_showcase::show(
-                            ui, &mut state.shape_preview, TEST_PATTERN_ID, text_density, state.style,
-                            ALPHA_MASK_ID, time, state.motion.enabled && !state.motion.reduced_motion,
-                        );
-                    });
-                    bar.tab("Render", |ui|state.render_preview.draw(ui,render_stats,timing_supported));
-                    bar.tab("Input", |ui|state.input_state.draw(ui));
-                    bar.tab("Settings", |ui| {
-                        ui.collapsing_header("Appearance", |ui| {
-                            if ui.combo("Theme", &THEME_NAMES, &mut state.theme) {
-                                eprintln!("[demo] theme -> {}", THEME_NAMES[state.theme]);
-                            }
-                            ui.tooltip_text(
-                                "Swaps the whole Style preset at the top of\n\
-                                 the next frame, overwriting the Style\n\
-                                 panel's edits below.",
-                            );
-                            ui.combo("Long list", &LONG_LIST, &mut state.long_list);
-                            ui.tooltip_text(
-                                "Combo scrolling: 30 items overflow the\n\
-                                 viewport-clamped popup — wheel over the open\n\
-                                 list scrolls it (a fitting list wouldn't).",
-                            );
-                            ui.searchable_combo("Search list", &LONG_LIST, &mut state.search_list, &mut state.search_query);
-                            ui.tooltip_text("Type to filter. Up/Down chooses a result; Enter selects it.");
-                            ui.list_box("List box", &LONG_LIST, &mut state.list_box, [240.0, 120.0]);
-                            ui.tooltip_text("A persistent list: click to select, wheel or drag the bar to scroll.");
-                            if ui.checkbox("Limit FPS", &mut state.limit_fps) {
-                                eprintln!(
-                                    "[demo] limit fps -> {} ({} fps)",
-                                    state.limit_fps, state.fps_limit
-                                );
-                            }
-                            ui.tooltip_text(
-                                "Off: vsync-capped continuous redraw (Poll +\n\
-                                 end-of-frame request_redraw). On: WaitUntil\n\
-                                 deadline pacing in about_to_wait — no sleep.",
-                            );
-                            ui.slider_int("FPS limit", &mut state.fps_limit, 15..=240);
-                            ui.color_edit_rgba("Circle color", &mut state.circle_color);
-                            ui.tooltip_text(
-                                "RGBA sliders driving the Canvas tab's\nanimated growing circle.",
-                            );
-                            ui.color_picker_rgba("Circle color (rich)", &mut state.circle_color);
-                            ui.tooltip_text(
-                                "Rich picker (SV square, hue strip, HSB + RGBA\n\
-                                 sliders, hex). Same target as the color edit above —\n\
-                                 edits through either one show up in the other's swatch.",
-                            );
-                        });
-                        ui.collapsing_header("Style", |ui| {
-                            let s = &mut state.style;
-                            ui.color_edit_rgba("Window bg", &mut s.window_bg);
-                            ui.color_edit_rgba("Title bg", &mut s.title_bg);
-                            ui.color_edit_rgba("Title text", &mut s.title_text);
-                            ui.color_edit_rgba("Widget bg", &mut s.widget_bg);
-                            ui.color_edit_rgba("Widget hovered", &mut s.widget_bg_hovered);
-                            ui.color_edit_rgba("Widget active", &mut s.widget_bg_active);
-                            ui.color_edit_rgba("Text color", &mut s.text);
-                            ui.color_edit_rgba("Scrollbar track", &mut s.scrollbar_bg);
-                            ui.tooltip_text(
-                                "The scrollbar's own recessed track color —\n\
-                                 deliberately darker than the window bg, and\n\
-                                 never the same color as the thumb below.",
-                            );
-                            ui.color_edit_rgba("Scrollbar thumb", &mut s.scrollbar_thumb);
-                            ui.color_edit_rgba(
-                                "Scrollbar thumb hovered",
-                                &mut s.scrollbar_thumb_hovered,
-                            );
-                            ui.color_edit_rgba(
-                                "Scrollbar thumb active",
-                                &mut s.scrollbar_thumb_active,
-                            );
-                            ui.slider_float("Scrollbar size", &mut s.scrollbar_size, 4.0..=32.0);
-                            ui.tooltip_text(
-                                "Width of the reserved strip. The strip is only\n\
-                                 reserved while a BAR container's content\n\
-                                 overflows — content that fits gets it back.",
-                            );
-                            ui.slider_float("Frame padding x", &mut s.frame_padding[0], 0.0..=24.0);
-                            ui.slider_float("Frame padding y", &mut s.frame_padding[1], 0.0..=24.0);
-                            ui.slider_float("Item spacing x", &mut s.item_spacing[0], 0.0..=24.0);
-                            ui.slider_float("Item spacing y", &mut s.item_spacing[1], 0.0..=24.0);
-                            ui.slider_float("Window padding x", &mut s.window_padding[0], 0.0..=24.0);
-                            ui.slider_float("Window padding y", &mut s.window_padding[1], 0.0..=24.0);
-                            ui.slider_float("Slider grab size", &mut s.slider_grab_size, 4.0..=32.0);
-                            ui.slider_float("Border size", &mut s.border_size, 0.0..=4.0);
-                            ui.slider_float("Corner rounding", &mut s.corner_rounding, 0.0..=16.0);
-                            ui.tooltip_text(
-                                "Rounded chrome: 9-slice corner-mask fills\n\
-                                 (4.0 by default). 0 = crisp rects.",
-                            );
-                        });
-                        ui.collapsing_header("Input", |ui| {
-                            ui.keybind("Action key", &mut state.binding);
-                            ui.tooltip_text(
-                                "Click to arm, then press any key, mouse button,\nor modifier chord. Escape cancels.",
-                            );
-                            ui.label(&format!("captured: {}", state.binding));
-                        });
-                        ui.collapsing_header("Fonts", |ui| {
-                            fonts_panel(
-                                ui,
-                                state,
-                                &face_infos,
-                                [atlas_w, atlas_h],
-                                atlas_generation,
-                            );
-                        });
-                    });
-                });
+                } else {
+                    gallery::draw(
+                        ui,
+                        state,
+                        &gallery::Frame {
+                            size: self.viewport_size,
+                            faces: &face_infos,
+                            icons: self.svg_icons,
+                            atlas: [atlas_w, atlas_h],
+                            atlas_generation,
+                            density: text_density,
+                            time: self.time,
+                            stats: render_stats,
+                            timing: timing_supported,
+                            interval: if self.measured_ms > 0. {
+                                self.measured_ms
+                            } else {
+                                dt * 1000.
+                            },
+                            preview_font: ui_font_face,
+                        },
+                    );
+                }
             });
-                ui.window(SANDBOX_WINDOW_TITLE, ScrollFlags::NONE, |ui| {
-                    ui.label("Drag this panel and try its controls.");
-                    ui.label("Only the front panel receives input.");
-                    if ui.button("Click counter") {
-                        state.sandbox_clicks += 1;
-                    }
-                    ui.same_line();
-                    ui.label(&format!("= {}", state.sandbox_clicks));
-                    ui.checkbox("Sandbox checkbox", &mut state.sandbox_check);
-                    ui.slider_float("Sandbox slider", &mut state.sandbox_slider, 0.0..=1.0);
-                    ui.label("Drag the lower corner to resize.");
-                    window_manager(ui, state);
-                });
-                ui.window(ROUTING_WINDOW_TITLE, ScrollFlags::BAR, |ui| {
-                    scroll_routing_window(ui, state);
-                });
-            }
-            if ui_font_face.is_some() {
-                ui.pop_font();
-            }
         }
-        if self.state.reopen_main {
-            self.state.reopen_main = false;
-            self.ctx.set_window_open(MAIN_WINDOW_TITLE, true);
-        }
-        if self.state.reopen_sandbox {
-            self.state.reopen_sandbox = false;
-            self.ctx.set_window_open(SANDBOX_WINDOW_TITLE, true);
-        }
-        if self.state.reopen_routing {
-            self.state.reopen_routing = false;
-            self.ctx.set_window_open(ROUTING_WINDOW_TITLE, true);
-        }
-
         let inspection = if self.state.inspect {
             if !self.inspector_was_enabled {
                 let x = (self.viewport_size[0] - 452.0).max(8.0);
@@ -1950,13 +1514,7 @@ impl App {
 
         let draw = self.ctx.render();
         let (verts, indices, cmds) = (draw.vertices.len(), draw.indices.len(), draw.commands.len());
-        let maximized = window.is_maximized();
-        self.chrome.rebuild(
-            self.viewport_size,
-            self.cursor_inside.then_some(self.mouse_pos),
-            maximized,
-            &self.state.style,
-        );
+        self.chrome.clear();
         if let Some(snapshot) = &inspection {
             self.chrome
                 .append_inspection_clips(&snapshot.clips, self.viewport_size);
@@ -1972,7 +1530,6 @@ impl App {
         if self.cursor_inside
             && !self.state.host_services.native_cursor
             && !self.state.host_services.idle
-            && chrome::hit_test(self.mouse_pos, self.viewport_size, maximized) == Hit::Content
         {
             self.cursor.rebuild(
                 self.mouse_pos,
@@ -1996,6 +1553,11 @@ impl App {
                 effects.threshold,
                 effects.intensity,
             );
+        }
+        if self.frame_count == 90 {
+            if let Some(path) = &self.capture_output {
+                renderer.capture_next_frame(path.clone());
+            }
         }
         renderer.render(&draw, &self.chrome, &self.cursor, self.state.style.title_bg);
         self.watchdog.progress.mark(frame_watchdog::Stage::Idle);
@@ -2046,28 +1608,14 @@ impl App {
 
     fn sync_cursor_visibility(&mut self) {
         let Some(window) = &self.window else { return };
-        let hit = if self.cursor_inside {
-            chrome::hit_test(self.mouse_pos, self.viewport_size, window.is_maximized())
-        } else {
-            Hit::Content
-        };
         let visible = !self.cursor_inside
-            || hit != Hit::Content
             || self.state.host_services.native_cursor
             || self.state.host_services.idle;
         if self.native_cursor_visible != Some(visible) {
             window.set_cursor_visible(visible);
             self.native_cursor_visible = Some(visible);
         }
-        let icon = match hit {
-            Hit::Resize(direction) => CursorIcon::from(direction),
-            Hit::Content
-                if self.state.host_services.native_cursor || self.state.host_services.idle =>
-            {
-                host_services_showcase::native_cursor(self.ctx.cursor_shape())
-            }
-            _ => CursorIcon::Default,
-        };
+        let icon = host_services_showcase::native_cursor(self.ctx.cursor_shape());
         if self.native_cursor_icon != Some(icon) {
             window.set_cursor(icon);
             self.native_cursor_icon = Some(icon);
@@ -2130,10 +1678,11 @@ impl ApplicationHandler for App {
         }
         let window = match event_loop.create_window(
             Window::default_attributes()
-                .with_title("tacita demo")
-                .with_inner_size(winit::dpi::LogicalSize::new(1350.0, 800.0))
-                .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0))
-                .with_decorations(false)
+                .with_title("Tacita")
+                .with_inner_size(winit::dpi::LogicalSize::new(1360.0, 860.0))
+                .with_min_inner_size(winit::dpi::LogicalSize::new(900.0, 620.0))
+                .with_decorations(true)
+                .with_theme(Some(winit::window::Theme::Dark))
                 .with_visible(false),
         ) {
             Ok(w) => Arc::new(w),
@@ -2166,7 +1715,6 @@ impl ApplicationHandler for App {
             initial_size.width, initial_size.height
         );
         self.update_display_metrics(initial_size, initial_scale);
-        self.arrange_startup_windows();
         let (pixels, w, h) = self.ctx.font().atlas_pixels();
         let generation = self.ctx.font().atlas_generation();
         match pollster::block_on(Renderer::new(window.clone(), pixels, w, h, generation)) {
@@ -2185,11 +1733,14 @@ impl ApplicationHandler for App {
                     TEST_PATTERN_SIZE,
                     TEST_PATTERN_SIZE,
                 );
+                let (banner, banner_width, banner_height) = banner_pixels();
+                renderer.add_host_texture(gallery::BANNER, &banner, banner_width, banner_height);
                 renderer.set_frame_progress(self.watchdog.progress.clone());
                 self.renderer = Some(renderer);
                 self.window = Some(window.clone());
+                self.state.host_services.bridge_status = "Off".into();
                 #[cfg(windows)]
-                {
+                if std::env::args().any(|arg| arg == "--native-accessibility") {
                     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     if let Ok(handle) = window.window_handle() {
                         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
@@ -2293,35 +1844,6 @@ impl ApplicationHandler for App {
                 self.sync_cursor_visibility();
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Left && state == ElementState::Pressed {
-                    if let Some(window) = &self.window {
-                        let hit = chrome::hit_test(
-                            self.mouse_pos,
-                            self.viewport_size,
-                            window.is_maximized(),
-                        );
-                        if hit != Hit::Content {
-                            self.mouse_down[0] = false;
-                            match hit {
-                                Hit::Drag => {
-                                    if let Err(error) = window.drag_window() {
-                                        eprintln!("[demo] window drag failed: {error}");
-                                    }
-                                }
-                                Hit::Minimize => window.set_minimized(true),
-                                Hit::Maximize => window.set_maximized(!window.is_maximized()),
-                                Hit::Close => event_loop.exit(),
-                                Hit::Resize(direction) => {
-                                    if let Err(error) = window.drag_resize_window(direction) {
-                                        eprintln!("[demo] window resize failed: {error}");
-                                    }
-                                }
-                                Hit::Content => unreachable!(),
-                            }
-                            return;
-                        }
-                    }
-                }
                 let index = match button {
                     MouseButton::Left => Some(0),
                     MouseButton::Right => Some(1),
@@ -2480,6 +2002,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 self.frame();
+                if self.capture_output.is_some() && self.frame_count > 90 {
+                    event_loop.exit();
+                }
                 if self.renderer_smoke && renderer_smoke::complete(self.frame_count) {
                     eprintln!("[smoke] shape-AA/renderer transitions completed");
                     event_loop.exit();
@@ -2790,7 +2315,7 @@ mod theme_tests {
         app.state.style.text = [1, 2, 3, 255];
         app.state.theme = 2;
         app.apply_theme();
-        assert_eq!(THEME_NAMES[app.state.theme], "nightfall");
+        assert_eq!(THEME_NAMES[app.state.theme], "Nightfall");
         assert_eq!(app.state.style, nightfall_style());
         assert_eq!(app.ctx.style, nightfall_style());
     }
